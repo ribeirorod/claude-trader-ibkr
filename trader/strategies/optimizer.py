@@ -26,6 +26,8 @@ class Optimizer:
                     best_params = params
             except Exception:
                 continue
+        if not best_params:
+            raise RuntimeError("grid_search: no valid parameter combination produced a score")
         return best_params
 
     def _score(self, close: pd.Series, signals: pd.Series, metric: str) -> float:
