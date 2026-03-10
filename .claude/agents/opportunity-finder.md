@@ -45,8 +45,9 @@ tail -100 .trader/logs/agent.jsonl 2>/dev/null | grep '"event":"WATCHLIST_SIGNAL
 
 Determine: when were watchlist tickers last checked for signals?
 
-**If watchlist is fresh (signals run within 4h pre-market, 8h intraday) AND market regime unchanged:**
-- Read watchlists directly: `uv run trader watchlist show LIST_NAME --signals` for each list
+**If watchlist is fresh (signals run within the last 4h if currently pre-market, within the last 8h if currently intraday) AND market regime unchanged:**
+- Read watchlists directly: `uv run trader watchlist show LIST_NAME` for each list to get tickers
+- Then run signals separately: `uv run trader strategies signals --tickers T1,T2,T3 --strategy rsi --with-news`
 - Skip fresh screener runs — proceed to Step 3 with watchlist tickers as candidates
 - Log: `{"event":"WATCHLIST_HIT","reason":"fresh signals, skipping screener"}`
 
@@ -57,7 +58,7 @@ Determine: when were watchlist tickers last checked for signals?
 ### Step 2a — Run screeners (when needed)
 
 Apply relevant screeners based on regime:
-- Trending / risk-on → `vcp-screener` (pass `--list vcp-candidates`), `stock-screener` (pass `--list canslim`)
+- Trending / risk-on → invoke `vcp-screener` skill (instruct it to add strong setups to the `vcp-candidates` watchlist), invoke `stock-screener` (instruct it to add strong candidates to the `canslim` watchlist)
 - Post-earnings → `earnings-trade-analyzer`
 - High-IV / range-bound → `options-strategy-advisor` (iron condor / short strangle candidates)
 - Sector rotation → `sector-analyst` + `technical-analyst`
@@ -97,6 +98,8 @@ Score 0-100 on: signal strength, sentiment, sector regime fit, profile preferenc
 Return top 3 maximum. For each opportunity, include an `ALERT_PROPOSAL` with the calculated entry price — the conductor routes this through order-alert-manager.
 
 **Do NOT call `trader alerts create` directly.** Proposals only.
+
+Note: include `alert_proposal` only for equity opportunities where a simple price-above/below trigger makes sense. Options opportunities (e.g., cash_secured_put, iron_condor) should omit the `alert_proposal` field — their entry triggers are multi-dimensional.
 
 For any HIGH priority opportunity not sourced from the `vcp-candidates` or `canslim` watchlists (i.e., a directly identified opportunistic play), also add the ticker to the momentum watchlist:
 ```bash
