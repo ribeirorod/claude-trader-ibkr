@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/beam/projects/vibe/trader/scripts/setup-crons.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
