@@ -33,9 +33,9 @@ For each `ALERT_PROPOSAL` in the incoming proposals:
 
 **Duplicate check:** Is there already an active alert for this ticker at the same price (±0.5%)? If yes → emit `NO_ACTION` with reason "Alert already active".
 
-**Signal freshness check:** Run a quick signal check:
+**Signal freshness check:** Run a signal check using the strategy from the proposal (fall back to `rsi` if unspecified):
 ```bash
-uv run trader strategies signals --tickers TICKER --strategy rsi
+uv run trader strategies signals --tickers TICKER --strategy STRATEGY_FROM_PROPOSAL
 ```
 If signal has reversed (was buy, now sell/neutral) → emit `NO_ACTION` with reason "Signal reversed since proposal".
 
@@ -45,7 +45,7 @@ For each open order in `open_orders`:
 
 **Signal health check:** Check if the strategy signal has reversed for that ticker since the order was placed. Use MA cross to confirm trend:
 ```bash
-uv run trader strategies run TICKER --strategy ma_cross --lookback 1mo
+uv run trader strategies signals --tickers TICKER --strategy ma_cross
 ```
 If trend reversed → emit `CANCEL_ORDER` proposal.
 
@@ -56,7 +56,7 @@ If order is more than 5 trading days old and has not filled → emit `CANCEL_ORD
 uv run trader quotes get TICKER
 ```
 Compare `last` price to alert's price/direction. If triggered:
-- Emit `PLACE_BRACKET` with entry (current ask), stop (below recent swing low or -5% default), target (2× risk reward), shares (from original proposal or default 1% account risk).
+- Emit `PLACE_BRACKET` with entry (current ask), stop (below recent swing low or -5% default), target (2× risk reward), shares (from original proposal or default 1% account risk), and `alert_id` from the `active_alerts` map (so the conductor can cancel the stale alert after placing orders).
 
 ### Step 3 — Return action list
 
@@ -78,6 +78,7 @@ Return all emitted actions as a JSON array. Every ticker gets exactly one action
   {
     "action": "PLACE_BRACKET",
     "ticker": "CRWD",
+    "alert_id": "98765",
     "entry": 320.00,
     "stop": 298.00,
     "target": 365.00,
@@ -104,3 +105,4 @@ Return all emitted actions as a JSON array. Every ticker gets exactly one action
 - Never call `trader alerts create`, `trader orders buy`, `trader orders stop`, or `trader orders sell`
 - Every proposal in your input gets a corresponding action in your output (even if `NO_ACTION`)
 - If `trader alerts list` or `trader orders list` fails (e.g., not connected), return `{"error": "could not fetch live state", "proposals_deferred": true}` — conductor will retry next cycle
+- **When multiple actions apply to the same ticker, use this priority:** `PLACE_BRACKET > CANCEL_ORDER > CREATE_ALERT > NO_ACTION`. Emit only the highest-priority action.
