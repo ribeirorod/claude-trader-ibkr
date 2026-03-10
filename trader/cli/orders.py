@@ -116,7 +116,7 @@ def trailing_stop(ctx, ticker, trail_percent, trail_amount):
     Use either --trail-percent or --trail-amount (not both).
     Example: trader orders trailing-stop AAPL --trail-percent 2.5
     """
-    if not trail_percent and not trail_amount:
+    if trail_percent is None and trail_amount is None:
         raise click.UsageError("Provide --trail-percent or --trail-amount")
     _run_order(ctx, OrderRequest(
         ticker=ticker, qty=0, side="sell", order_type="trailing_stop",
@@ -149,9 +149,9 @@ def modify(ctx, order_id, price, qty):
     """
     adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
     kwargs = {}
-    if price:
+    if price is not None:
         kwargs["price"] = price
-    if qty:
+    if qty is not None:
         kwargs["quantity"] = qty
     async def run():
         await adapter.connect()
