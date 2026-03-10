@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import datetime
 from trader.adapters.base import Adapter
 from trader.adapters.ibkr_rest.client import IBKRRestClient
 from trader.models import (
@@ -70,7 +71,8 @@ class IBKRRestAdapter(Adapter):
     async def get_option_chain(self, ticker: str, expiry: str) -> OptionChain:
         search = await self._client.get(f"/iserver/secdef/search?symbol={ticker}")
         conid = search[0]["conid"]
-        month = expiry[:7].replace("-", "")
+        dt = datetime.strptime(expiry[:7], "%Y-%m")
+        month = dt.strftime("%b%y").upper()  # e.g. "MAR26"
         strikes = await self._client.get(
             f"/iserver/secdef/strike?conid={conid}&sectype=OPT&month={month}"
         )
@@ -84,9 +86,12 @@ class IBKRRestAdapter(Adapter):
     async def place_order(self, req: OrderRequest) -> Order:
         conid = await self._resolve_conid(req.ticker, req.contract_type,
                                           req.expiry, req.strike, req.right)
+        ibkr_order_type = _ORDER_TYPE_MAP.get(req.order_type)
+        if ibkr_order_type is None:
+            raise ValueError(f"Unsupported order_type '{req.order_type}'. Supported: {list(_ORDER_TYPE_MAP)}")
         body = {
             "conid": conid,
-            "orderType": _ORDER_TYPE_MAP[req.order_type],
+            "orderType": ibkr_order_type,
             "side": req.side.upper(),
             "quantity": req.qty,
             "tif": "DAY",
@@ -142,7 +147,7 @@ class IBKRRestAdapter(Adapter):
             result.append(Order(
                 order_id=str(o.get("orderId", "")),
                 ticker=o.get("ticker", ""),
-                qty=float(o.get("remainingQuantity", 0)),
+                qty=float(o.get("totalSize", o.get("size", 0))),
                 side=o.get("side", "buy").lower(),
                 order_type=o.get("orderType", "market").lower(),
                 status=order_status,
@@ -202,4 +207,15 @@ class IBKRRestAdapter(Adapter):
         right: str | None = None
     ) -> int:
         search = await self._client.get(f"/iserver/secdef/search?symbol={ticker}")
-        return search[0]["conid"]
+        underlying_conid = search[0]["conid"]
+        if contract_type != "option" or not expiry or not strike or not right:
+            return underlying_conid
+        # Resolve the specific option contract conid
+        dt = datetime.strptime(expiry[:7], "%Y-%m")
+        month = dt.strftime("%b%y").upper()
+        right_char = right[0].upper()  # "C" or "P"
+        info = await self._client.get(
+            f"/iserver/secdef/info?conid={underlying_conid}&sectype=OPT"
+            f"&month={month}&strike={strike}&right={right_char}"
+        )
+        return info[0]["conid"]
