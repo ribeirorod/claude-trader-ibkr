@@ -1,0 +1,26 @@
+[
+  {
+    "id": "pre-market",
+    "cron": "3 8 * * 1-5",
+    "label": "Weekdays 8:03am — pre-market",
+    "agent": "portfolio-conductor",
+    "slot": "pre-market",
+    "prompt": "Run pre-market portfolio analysis. You are the portfolio-conductor agent. Time slot: pre-market. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account summary`, `uv run trader orders list --status open` to fetch live snapshot; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json` for profile; (4) dispatch risk-monitor, portfolio-health, and opportunity-finder agents with full context; (5) review proposals, log ORDER_INTENT for each approved trade, execute in autonomous mode; (6) log RUN_END to .trader/logs/agent.jsonl."
+  },
+  {
+    "id": "intraday",
+    "cron": "7 9-16 * * 1-5",
+    "label": "Weekdays 9am–4pm hourly — intraday",
+    "agent": "portfolio-conductor",
+    "slot": "intraday",
+    "prompt": "Run intraday portfolio check. You are the portfolio-conductor agent. Time slot: intraday. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader account summary`, `uv run trader orders list --status open`; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json`; (4) always dispatch risk-monitor and portfolio-health; dispatch opportunity-finder only if no opportunity signal was logged in the last 4 hours; (5) review proposals, log ORDER_INTENT, execute in autonomous mode; (6) if nothing actionable, log RUN_END with do_nothing:true and exit."
+  },
+  {
+    "id": "weekly",
+    "cron": "3 18 * * 0",
+    "label": "Sunday 6:03pm — weekly review",
+    "agent": "portfolio-conductor",
+    "slot": "weekly",
+    "prompt": "Run weekly portfolio deep review. You are the portfolio-conductor agent. Time slot: weekly. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account summary`; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null`; (3) run `cat .trader/profile.json`; (4) dispatch portfolio-health for deep weekly review (HHI, top positions RSI+sentiment); dispatch strategy-optimizer to backtest and refresh params; skip opportunity-finder this slot; (5) log all proposals and any rebalance recommendations to .trader/logs/agent.jsonl; (6) execute any approved rebalancing trades in autonomous mode; (7) log RUN_END with weekly summary."
+  }
+]
