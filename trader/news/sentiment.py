@@ -33,14 +33,27 @@ class SentimentScorer:
         items: list[NewsItem],
         lookback_hours: int = 24,
     ) -> SentimentResult:
-        if not items:
+        from datetime import datetime, timezone, timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+        filtered = []
+        for item in items:
+            try:
+                pub = datetime.fromisoformat(item.published_at.replace("Z", "+00:00"))
+                if pub >= cutoff:
+                    filtered.append(item)
+            except (ValueError, AttributeError):
+                # If we can't parse the date, include the item to avoid silent data loss
+                filtered.append(item)
+
+        if not filtered:
             return SentimentResult(
                 ticker=ticker, score=0.0, signal="neutral",
                 article_count=0, lookback_hours=lookback_hours, top_headlines=[]
             )
 
         scored = sorted(
-            [(item, _score_item(item)) for item in items],
+            [(item, _score_item(item)) for item in filtered],
             key=lambda x: abs(x[1]),
             reverse=True,
         )
@@ -58,7 +71,7 @@ class SentimentScorer:
             ticker=ticker,
             score=round(clamped, 3),
             signal=signal,
-            article_count=len(items),
+            article_count=len(filtered),
             lookback_hours=lookback_hours,
             top_headlines=[item.headline for item, _ in scored[:3]],
         )
