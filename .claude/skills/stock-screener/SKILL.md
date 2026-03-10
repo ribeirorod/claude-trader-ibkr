@@ -62,7 +62,7 @@ Use a priority chain — stop at the first source that yields ≥10 tickers:
 ```bash
 uv run trader watchlist show canslim
 ```
-If the `canslim` watchlist exists and has tickers, use them as the starting universe. Skip scanner runs.
+If the command returns a JSON object with a `quotes` array containing **≥10 tickers** (not an `error` key), use those tickers as the starting universe and skip scanner runs. If fewer than 10 tickers are present or the command returns `{"error": ...}`, fall through to Priority 2.
 
 **Priority 2 — `trader scan` (live IBKR scanner):**
 Run the default CANSLIM scan set and merge/deduplicate results:
@@ -209,7 +209,7 @@ Present results as a ranked table, then detail each top candidate.
 | Trend confirmation | `uv run trader strategies run TICKER --strategy ma_cross --lookback 1y` |
 | News sentiment | `uv run trader news sentiment TICKER --lookback 7d` |
 | Show CANSLIM watchlist | `uv run trader watchlist show canslim` |
-| Add to CANSLIM watchlist | `uv run trader watchlist add TICKER --list canslim` |
+| Add to CANSLIM watchlist | `uv run trader watchlist add TICKER [TICKER2 ...] --list canslim` |
 
 ---
 
