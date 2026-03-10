@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio
+import asyncio, json
 import click
 from trader.news.benzinga import BenzingaClient
 from trader.news.sentiment import SentimentScorer
@@ -35,7 +35,12 @@ def latest(ctx, tickers, limit):
             return await client.get_news(ticker_list, limit=limit)
         finally:
             await client.aclose()
-    output_json(asyncio.get_event_loop().run_until_complete(run()))
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @news.command()
 @click.argument("ticker")
@@ -57,4 +62,9 @@ def sentiment(ctx, ticker, lookback):
         finally:
             await client.aclose()
         return scorer.score(ticker, items, lookback_hours=hours)
-    output_json(asyncio.get_event_loop().run_until_complete(run()))
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)

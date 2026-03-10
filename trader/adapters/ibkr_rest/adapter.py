@@ -105,9 +105,37 @@ class IBKRRestAdapter(Adapter):
             body["trailingAmt"] = req.trail_amount
             body["trailingType"] = "amt"
 
+        orders_payload = [body]
+
+        if req.order_type == "bracket" and req.take_profit:
+            tp_order = {
+                "conid": conid,
+                "orderType": "LMT",
+                "side": "SELL" if req.side == "buy" else "BUY",
+                "quantity": req.qty,
+                "price": req.take_profit,
+                "tif": "GTC",
+                "isSingleGroup": True,
+                "outsideRth": False,
+            }
+            orders_payload.append(tp_order)
+
+        if req.order_type == "bracket" and req.stop_loss:
+            sl_order = {
+                "conid": conid,
+                "orderType": "STP",
+                "side": "SELL" if req.side == "buy" else "BUY",
+                "quantity": req.qty,
+                "price": req.stop_loss,
+                "tif": "GTC",
+                "isSingleGroup": True,
+                "outsideRth": False,
+            }
+            orders_payload.append(sl_order)
+
         resp = await self._client.post(
             f"/iserver/account/{self._account_id}/orders",
-            json={"orders": [body]}
+            json={"orders": orders_payload}
         )
         r = resp[0] if isinstance(resp, list) else resp
         return Order(

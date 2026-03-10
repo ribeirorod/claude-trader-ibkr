@@ -17,7 +17,12 @@ def _run_order(ctx, req: OrderRequest):
             return await adapter.place_order(req)
         finally:
             await adapter.disconnect()
-    output_json(asyncio.get_event_loop().run_until_complete(run()))
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @orders.command()
 @click.argument("ticker")
@@ -99,8 +104,25 @@ def stop(ctx, ticker, price):
 
     Example: trader orders stop AAPL --price 185.00
     """
-    _run_order(ctx, OrderRequest(ticker=ticker, qty=0, side="sell",
-                                  order_type="stop", price=price))
+    adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+    async def run():
+        await adapter.connect()
+        try:
+            positions = await adapter.list_positions()
+            pos = next((p for p in positions if p.ticker == ticker), None)
+            qty = abs(pos.qty) if pos else 0
+            return await adapter.place_order(OrderRequest(
+                ticker=ticker, qty=qty, side="sell",
+                order_type="stop", price=price
+            ))
+        finally:
+            await adapter.disconnect()
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @orders.command("trailing-stop")
 @click.argument("ticker")
@@ -133,8 +155,25 @@ def take_profit(ctx, ticker, price):
 
     Example: trader orders take-profit AAPL --price 210.00
     """
-    _run_order(ctx, OrderRequest(ticker=ticker, qty=0, side="sell",
-                                  order_type="limit", price=price))
+    adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+    async def run():
+        await adapter.connect()
+        try:
+            positions = await adapter.list_positions()
+            pos = next((p for p in positions if p.ticker == ticker), None)
+            qty = abs(pos.qty) if pos else 0
+            return await adapter.place_order(OrderRequest(
+                ticker=ticker, qty=qty, side="sell",
+                order_type="limit", price=price
+            ))
+        finally:
+            await adapter.disconnect()
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @orders.command()
 @click.argument("order_id")
@@ -159,7 +198,12 @@ def modify(ctx, order_id, price, qty):
             return await adapter.modify_order(order_id, **kwargs)
         finally:
             await adapter.disconnect()
-    output_json(asyncio.get_event_loop().run_until_complete(run()))
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @orders.command()
 @click.argument("order_id")
@@ -178,7 +222,12 @@ def cancel(ctx, order_id):
         finally:
             await adapter.disconnect()
         return {"cancelled": ok, "order_id": order_id}
-    output_json(asyncio.get_event_loop().run_until_complete(run()))
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @orders.command("list")
 @click.option("--status", default="all",
@@ -198,4 +247,9 @@ def list_orders(ctx, status):
             return await adapter.list_orders(status)
         finally:
             await adapter.disconnect()
-    output_json(asyncio.get_event_loop().run_until_complete(run()))
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)

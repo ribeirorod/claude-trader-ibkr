@@ -91,7 +91,7 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
             sents[ticker] = scorer.score(ticker, ticker_items)
         return sents
 
-    sentiments = asyncio.get_event_loop().run_until_complete(get_sentiments())
+    sentiments = asyncio.run(get_sentiments())
 
     for ticker in ticker_list:
         try:
