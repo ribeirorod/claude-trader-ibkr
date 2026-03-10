@@ -71,7 +71,7 @@ Use a priority chain — stop at the first source that yields ≥5 tickers:
 ```bash
 uv run trader watchlist show vcp-candidates
 ```
-If the `vcp-candidates` watchlist exists and has tickers, use them as the starting universe. Skip to Step 2.
+If the command returns a JSON object with a `quotes` array (not an `error` key), use those tickers as the starting universe and skip to Step 2. If the command returns `{"error": ...}` or exits non-zero (watchlist empty or missing), fall through to Priority 2.
 
 **Priority 2 — `trader scan` (live IBKR scanner):**
 Run two scans and merge results:
@@ -174,6 +174,11 @@ uv run trader watchlist add TICKER1 TICKER2 --list vcp-candidates
 
 This keeps the `vcp-candidates` watchlist current so future runs can skip the scanner step when signals are fresh.
 
+Also remove tickers that fail Stage 2 screening (downtrend or no VCP structure) from the watchlist to prevent stale candidates accumulating:
+```bash
+uv run trader watchlist remove FAILED_TICKER1 FAILED_TICKER2 --list vcp-candidates
+```
+
 ### Step 8: Output Report
 
 ```
@@ -226,7 +231,7 @@ This keeps the `vcp-candidates` watchlist current so future runs can skip the sc
 | Place pivot breakout order | `uv run trader orders buy TICKER QTY --type limit --price PIVOT` |
 | Protect with stop | `uv run trader orders stop TICKER --price STOP_LEVEL` |
 | Show VCP watchlist | `uv run trader watchlist show vcp-candidates` |
-| Add to VCP watchlist | `uv run trader watchlist add TICKER --list vcp-candidates` |
+| Add to VCP watchlist | `uv run trader watchlist add TICKER [TICKER2 ...] --list vcp-candidates` |
 
 ---
 
