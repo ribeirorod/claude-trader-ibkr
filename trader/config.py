@@ -16,6 +16,9 @@ class Config:
     max_position_pct: float = field(default_factory=lambda: float(os.getenv("MAX_POSITION_PCT", "0.05")))
     default_strategy: str = field(default_factory=lambda: os.getenv("DEFAULT_STRATEGY", "rsi"))
     default_broker: str = field(default_factory=lambda: os.getenv("DEFAULT_BROKER", "ibkr-rest"))
+    agent_mode: str = field(default_factory=lambda: os.getenv("AGENT_MODE", "autonomous"))
+    agent_log_path: str = field(default_factory=lambda: os.getenv("AGENT_LOG_PATH", ".trader/logs/agent.jsonl"))
+    agent_profile_path: str = field(default_factory=lambda: os.getenv("AGENT_PROFILE_PATH", ".trader/profile.json"))
 
     @property
     def ibkr_rest_base_url(self) -> str:
