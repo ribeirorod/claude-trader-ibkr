@@ -1,0 +1,40 @@
+{
+  "profile_version": "1.0",
+  "last_updated": "2026-03-10",
+  "risk_tolerance": "moderate",
+  "time_horizon": "mid-term",
+  "trading_style": {
+    "day_trading": "minimal",
+    "preferred_hold_days": "5-90",
+    "note": "keep turnover low, favor swing and position trades"
+  },
+  "asset_classes": {
+    "equities": true,
+    "etfs": true,
+    "options": true,
+    "futures": true,
+    "crypto": false,
+    "leverage": false
+  },
+  "preferred_sectors": [
+    "energy",
+    "emerging_markets",
+    "semiconductors",
+    "defense"
+  ],
+  "sector_note": "agents may screen and invest in other sectors when signals are strong — these are starting bias, not exclusions",
+  "portfolio_targets": {
+    "max_single_position_pct": 10,
+    "max_sector_concentration_pct": 35,
+    "max_new_positions_per_day": 3,
+    "target_cash_reserve_pct": 10
+  },
+  "options_preferences": {
+    "allowed_strategies": [
+      "covered_call", "cash_secured_put", "spreads",
+      "iron_condor", "directional", "earnings_plays"
+    ],
+    "max_options_portfolio_pct": 20
+  },
+  "notes": "Free-form field. Update as your thesis evolves — agents read this on every run."
+}
