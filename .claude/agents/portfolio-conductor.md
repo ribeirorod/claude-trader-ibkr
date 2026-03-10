@@ -56,6 +56,7 @@ date
 
 - **pre-market**: weekday, before 9:30am ET
 - **intraday**: weekday, 9:30am–4pm ET
+- **bi-weekly**: 1st or 15th of the month (any day)
 - **weekly**: Sunday
 
 ### 5. Decide workflow
@@ -64,9 +65,11 @@ Based on time slot, portfolio state, and recent log:
 
 - **Always** run `risk-monitor` if there are open positions
 - **Always** run `portfolio-health` (surfaces drift even when no action needed)
-- **pre-market** → run `opportunity-finder` with full scan
-- **intraday** → run `opportunity-finder` only if no opportunity was found in the last 4 hours (check log)
-- **weekly** → run `portfolio-health` deep review + `strategy-optimizer`; skip `opportunity-finder`
+- **Always** run `order-alert-manager` — pass it any proposals from other specialists plus the current snapshot
+- **pre-market** → run `opportunity-finder` (watchlist-aware; agent decides scan depth)
+- **intraday** → run `opportunity-finder` only if watchlist signals are stale (check log timestamp)
+- **bi-weekly** → run `strategy-optimizer` + `order-alert-manager`; skip `opportunity-finder` unless pre-market
+- **weekly** → run `portfolio-health` deep review; `strategy-optimizer` if not run this week
 - **"Do nothing" is always valid** — if situation is calm and no strong signals exist, log it and exit
 
 Log your workflow decision:
@@ -85,6 +88,8 @@ Use the Agent tool to invoke each specialist. Pass full context in the prompt:
 
 Collect each specialist's JSON proposals.
 
+**Proposal consolidation:** After collecting all specialist outputs, pass any `ALERT_PROPOSAL` and `ORDER_PROPOSAL` objects from opportunity-finder and strategy-optimizer to `order-alert-manager` along with the snapshot. Collect its action list before proceeding to Step 7.
+
 ### 7. Review proposals against guardrails
 
 For each proposed trade:
@@ -92,6 +97,12 @@ For each proposed trade:
 - Single position ≤ `max_single_position_pct`% of net liquidation
 - Daily new positions ≤ `max_new_positions_per_day` (count from today's log entries)
 - Skip and log reason if any guardrail is breached
+
+**Order-alert-manager actions:** For each action in the order-alert-manager output:
+- `CREATE_ALERT` → approved if guardrails pass; execute `trader alerts create TICKER --above/--below PRICE --name NAME`
+- `PLACE_BRACKET` → approve as a new position; apply position sizing guardrails; execute buy + stop orders; cancel the originating alert using its `alert_id`
+- `CANCEL_ORDER` → approve automatically; execute `trader orders cancel ORDER_ID`
+- `NO_ACTION` → log and skip
 
 ### 8. Log intent, then execute (autonomous mode only)
 
