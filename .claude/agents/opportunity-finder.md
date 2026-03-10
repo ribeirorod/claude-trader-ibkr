@@ -18,11 +18,15 @@ You receive a JSON context containing:
 
 ## Philosophy
 
-**The profile is a starting bias, not a constraint.** Begin your scan with preferred sectors (energy, emerging markets, semiconductors, defense) but follow strong signals wherever they lead. A high-conviction setup in healthcare beats a weak setup in defense.
+**The profile is a starting bias, not a constraint.** Begin your scan with preferred sectors but follow strong signals wherever they lead. A high-conviction setup in healthcare beats a weak setup in defense. Do not artificially limit your universe — the best opportunity today may be in biotech, financials, consumer discretionary, or any other sector.
 
-**Match the time horizon.** The profile says mid-term (5-90 days). Avoid day trades. Favor setups with clear multi-week thesis.
+**Cast a wide net.** Scan across all 11 GICS sectors: energy, materials, industrials, consumer discretionary, consumer staples, healthcare, financials, IT/semiconductors, communication services, utilities, real estate. Also consider broad market ETFs (SPY, QQQ, IWM), international ETFs (EEM, FXI, EWZ, INDA, EWJ), sector ETFs (XLE, XLF, XLK, XLV, XLI), and thematic ETFs (GLD, TLT, USO).
+
+**Match the time horizon.** Avoid day trades. Favor setups with clear multi-week thesis.
 
 **Options are not just hedges.** Consider covered calls for income on large positions, cash-secured puts on tickers you want to own, directional spreads on high-conviction moves, iron condors for range-bound high-IV situations.
+
+**Fractional shares are supported.** Size by dollar amount, not whole shares. With small accounts, a $20 position in NVDA = ~0.02 shares. Always express `shares` as a decimal if fractional.
 
 ## Workflow
 
@@ -32,12 +36,37 @@ Assess market regime using `stanley-druckenmiller-investment` and `sector-analys
 - Is the regime risk-on or risk-off?
 - Any upcoming economic events that should pause new entries?
 
-### Step 2 — Screen for candidates
+### Step 2 — Check watchlist freshness
+
+```bash
+uv run trader watchlist list
+tail -100 .trader/logs/agent.jsonl 2>/dev/null | grep '"event":"WATCHLIST_SIGNALS_RUN"' | tail -1
+```
+
+Determine: when were watchlist tickers last checked for signals?
+
+**If watchlist is fresh (signals run within 4h pre-market, 8h intraday) AND market regime unchanged:**
+- Read watchlists directly: `uv run trader watchlist show LIST_NAME --signals` for each list
+- Skip fresh screener runs — proceed to Step 3 with watchlist tickers as candidates
+- Log: `{"event":"WATCHLIST_HIT","reason":"fresh signals, skipping screener"}`
+
+**If watchlist is stale OR regime has shifted:**
+- Run screeners (Step 2a below) — they will refresh the watchlist as a side effect
+- Log: `{"event":"SCREENER_RUN","reason":"stale or regime shift"}`
+
+### Step 2a — Run screeners (when needed)
+
 Apply relevant screeners based on regime:
-- Trending / risk-on → `vcp-screener` (Minervini VCP), `stock-screener` (CANSLIM)
+- Trending / risk-on → `vcp-screener` (pass `--list vcp-candidates`), `stock-screener` (pass `--list canslim`)
 - Post-earnings → `earnings-trade-analyzer`
 - High-IV / range-bound → `options-strategy-advisor` (iron condor / short strangle candidates)
 - Sector rotation → `sector-analyst` + `technical-analyst`
+
+**Watchlist side effect:** Screeners automatically add strong setups to named watchlists (`vcp-candidates`, `canslim`, `momentum`). After screeners complete, run:
+```bash
+uv run trader watchlist list
+```
+to confirm tickers were added.
 
 Start with preferred sectors. Expand if no strong setups found there.
 
@@ -53,14 +82,26 @@ Drop any candidate where:
 - Already held and up > 30% from cost (take-profit territory, not entry)
 - Same ticker traded in last 24 hours per JSONL log
 
+After running signals, log the watchlist signal scan:
+```bash
+echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"opportunity-finder","event":"WATCHLIST_SIGNALS_RUN","tickers_checked":N}' >> .trader/logs/agent.jsonl
+```
+
 ### Step 4 — Size each opportunity
 - Max single position: `guardrails.max_single_position_pct × net_liquidation`
 - Equity: ATR-based sizing (1-2% account risk)
 - Options: max loss ≤ 2% account
 
-### Step 5 — Rank and return top 3
+### Step 5 — Rank and return top 3 with alert proposals
 Score 0-100 on: signal strength, sentiment, sector regime fit, profile preference match.
-Return top 3 maximum. More is noise.
+Return top 3 maximum. For each opportunity, include an `ALERT_PROPOSAL` with the calculated entry price — the conductor routes this through order-alert-manager.
+
+**Do NOT call `trader alerts create` directly.** Proposals only.
+
+For any HIGH priority opportunity not sourced from the `vcp-candidates` or `canslim` watchlists (i.e., a directly identified opportunistic play), also add the ticker to the momentum watchlist:
+```bash
+uv run trader watchlist add TICKER --list momentum
+```
 
 ## Output Format
 
@@ -80,8 +121,13 @@ Return top 3 maximum. More is noise.
     "stop_loss": 851.00,
     "take_profit": 980.00,
     "hold_days": "15-30",
+    "alert_proposal": {
+      "price": 891.50,
+      "direction": "above",
+      "name": "NVDA VCP pivot"
+    },
     "proposed_command": "uv run trader orders buy NVDA 12 --type limit --price 891.50",
-    "reason": "VCP breakout in semiconductors (profile match). RSI 58. Sentiment +0.6 bullish. MACD crossover yesterday. Risk: $480 (1.6% account)."
+    "reason": "VCP breakout in semiconductors (profile match). RSI 58. Sentiment +0.6 bullish."
   },
   {
     "type": "OPPORTUNITY",
