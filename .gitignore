@@ -10,3 +10,6 @@ build/
 outputs/
 results/
 *.pkl
+
+# Agent logs (JSONL — tracked by directory, not content)
+.trader/logs/*.jsonl
