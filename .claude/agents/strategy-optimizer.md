@@ -20,7 +20,7 @@ Bi-weekly baseline: 1st and 15th of the month. The conductor may also invoke you
 tail -200 .trader/logs/agent.jsonl 2>/dev/null | grep '"event":"OPTIMIZATION_COMPLETE"'
 ```
 
-Build a map of `{ticker: last_optimized_date}` from log entries.
+Build a set of tickers that appear in any `OPTIMIZATION_COMPLETE` entry within the last 30 days, along with the run timestamp. Use this to identify which tickers have been recently reviewed.
 
 ### Step 2 — Read watchlists
 
