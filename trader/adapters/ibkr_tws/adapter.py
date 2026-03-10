@@ -59,11 +59,15 @@ class IBKRTWSAdapter(Adapter):
         contracts = [Stock(t, "SMART", "USD") for t in tickers]
         await ib.qualifyContractsAsync(*contracts)
         tickers_data = [ib.reqMktData(c, "", False, False) for c in contracts]
-        await ib.sleep(1)
-        return [
-            Quote(ticker=t, bid=td.bid, ask=td.ask, last=td.last)
-            for t, td in zip(tickers, tickers_data)
-        ]
+        try:
+            await ib.sleep(1)
+            return [
+                Quote(ticker=t, bid=td.bid, ask=td.ask, last=td.last)
+                for t, td in zip(tickers, tickers_data)
+            ]
+        finally:
+            for c in contracts:
+                ib.cancelMktData(c)
 
     async def get_option_chain(self, ticker: str, expiry: str) -> OptionChain:
         from ib_insync import Stock
@@ -115,7 +119,8 @@ class IBKRTWSAdapter(Adapter):
         trade = next((t for t in trades if str(t.order.orderId) == order_id), None)
         if trade:
             ib.cancelOrder(trade.order)
-        return True
+            return True
+        return False
 
     async def list_orders(self, status: str = "all") -> list[Order]:
         ib = self._get_ib()
