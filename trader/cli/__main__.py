@@ -114,7 +114,7 @@ def cli(ctx, broker, output, save, output_dir):
     ctx.obj["output_dir"] = output_dir
 
 
-from trader.cli import account, quotes, orders, positions, news, strategies, alerts, scan, watchlist
+from trader.cli import account, quotes, orders, positions, news, strategies, alerts, scan, watchlist, report
 
 cli.add_command(account.account)
 cli.add_command(quotes.quotes)
@@ -125,6 +125,7 @@ cli.add_command(strategies.strategies)
 cli.add_command(alerts.alerts)
 cli.add_command(scan.scan)
 cli.add_command(watchlist.watchlist)
+cli.add_command(report.report)
 
 if __name__ == "__main__":
     cli()

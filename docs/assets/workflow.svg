@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 720" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<defs>
+<marker id="a" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#8b949e"/></marker>
+<marker id="ag" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#3fb950"/></marker>
+<marker id="ar" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#f85149"/></marker>
+<marker id="ap" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#a371f7"/></marker>
+</defs>
+<rect x="0" y="0" width="900" height="720" rx="12" fill="#0d1117" stroke="#0d1117" stroke-width="0"/>
+<text x="450" y="26" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="600">Autonomous Portfolio Conductor</text>
+<text x="450" y="42" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="normal">Agentic Workflow · All Times CET</text>
+<rect x="20" y="58" width="126" height="36" rx="6" fill="#0c1c33" stroke="#388bfd" stroke-width="1.5"/>
+<text x="83" y="72" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="500">EU Pre-market</text>
+<text x="83" y="85" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="normal">8:03am</text>
+<rect x="166" y="58" width="126" height="36" rx="6" fill="#0c1c33" stroke="#388bfd" stroke-width="1.5"/>
+<text x="229" y="72" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="500">EU Market</text>
+<text x="229" y="85" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="normal">9am–3pm</text>
+<rect x="312" y="58" width="126" height="36" rx="6" fill="#221a00" stroke="#d29922" stroke-width="1.5"/>
+<text x="375" y="72" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="500">EU+US Overlap</text>
+<text x="375" y="85" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="normal">3:03pm</text>
+<rect x="458" y="58" width="126" height="36" rx="6" fill="#0c1c33" stroke="#388bfd" stroke-width="1.5"/>
+<text x="521" y="72" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="500">US Market</text>
+<text x="521" y="85" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="normal">5–9pm</text>
+<rect x="604" y="58" width="126" height="36" rx="6" fill="#160d22" stroke="#a371f7" stroke-width="1.5"/>
+<text x="667" y="72" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="500">Weekly</text>
+<text x="667" y="85" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="normal">Sun 6pm</text>
+<rect x="750" y="58" width="126" height="36" rx="6" fill="#160d22" stroke="#a371f7" stroke-width="1.5"/>
+<text x="813" y="72" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="500">Monthly</text>
+<text x="813" y="85" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="normal">1st Sun</text>
+<line x1="83" y1="94" x2="83" y2="106" stroke="#21262d" stroke-width="1.2"/>
+<line x1="229" y1="94" x2="229" y2="106" stroke="#21262d" stroke-width="1.2"/>
+<line x1="375" y1="94" x2="375" y2="106" stroke="#21262d" stroke-width="1.2"/>
+<line x1="521" y1="94" x2="521" y2="106" stroke="#21262d" stroke-width="1.2"/>
+<line x1="667" y1="94" x2="667" y2="106" stroke="#21262d" stroke-width="1.2"/>
+<line x1="813" y1="94" x2="813" y2="106" stroke="#21262d" stroke-width="1.2"/>
+<line x1="83" y1="106" x2="813" y2="106" stroke="#21262d" stroke-width="1.2"/>
+<line x1="450" y1="106" x2="450" y2="122" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="320" y="124" width="260" height="44" rx="8" fill="#221a00" stroke="#d29922" stroke-width="2"/>
+<text x="450" y="142" text-anchor="middle" fill="#e6edf3" font-size="13" font-weight="600">Portfolio Conductor</text>
+<text x="450" y="157" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="normal">sole order-placement agent</text>
+<line x1="450" y1="168" x2="450" y2="192" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="194" width="400" height="40" rx="6" fill="#161b22" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="194" width="4" height="40" rx="2" fill="#388bfd" stroke="#388bfd" stroke-width="0"/>
+<text x="264" y="209" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">① Live Snapshot</text>
+<text x="264" y="224" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">positions · cash · open orders  →  portfolio_evolution.jsonl</text>
+<line x1="450" y1="234" x2="450" y2="246" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="248" width="400" height="40" rx="6" fill="#161b22" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="248" width="4" height="40" rx="2" fill="#388bfd" stroke="#388bfd" stroke-width="0"/>
+<text x="264" y="263" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">② Session Gates</text>
+<text x="264" y="278" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">Calendar  →  risk_mode   ·   Geo Scan  →  geo_context</text>
+<line x1="450" y1="288" x2="450" y2="300" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="302" width="400" height="40" rx="6" fill="#161b22" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="302" width="4" height="40" rx="2" fill="#388bfd" stroke="#388bfd" stroke-width="0"/>
+<text x="264" y="317" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">③ Market News Analyst</text>
+<text x="264" y="332" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">held tickers + watchlist  →  news_context per ticker</text>
+<line x1="450" y1="342" x2="450" y2="354" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="356" width="400" height="40" rx="6" fill="#161b22" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="356" width="4" height="40" rx="2" fill="#388bfd" stroke="#388bfd" stroke-width="0"/>
+<text x="264" y="371" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">④ Risk Monitor</text>
+<text x="264" y="386" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">news + geo context  →  stop / trim proposals</text>
+<line x1="450" y1="396" x2="450" y2="408" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="410" width="400" height="40" rx="6" fill="#161b22" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="410" width="4" height="40" rx="2" fill="#388bfd" stroke="#388bfd" stroke-width="0"/>
+<text x="264" y="425" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">⑤ Portfolio Health</text>
+<text x="264" y="440" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">concentration · drift · HHI  →  rebalance proposals</text>
+<line x1="450" y1="450" x2="450" y2="462" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="464" width="400" height="40" rx="6" fill="#221a00" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="464" width="4" height="40" rx="2" fill="#d29922" stroke="#d29922" stroke-width="0"/>
+<text x="264" y="479" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">⑥ Opportunity Finder</text>
+<text x="264" y="494" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">EU stocks · US stocks · UCITS ETFs   [skipped if ELEVATED risk]</text>
+<line x1="450" y1="504" x2="450" y2="516" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="518" width="400" height="40" rx="6" fill="#161b22" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="518" width="4" height="40" rx="2" fill="#388bfd" stroke="#388bfd" stroke-width="0"/>
+<text x="264" y="533" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">⑦ Order Alert Manager</text>
+<text x="264" y="548" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">alert lifecycle · dedup · bracket entries  →  action list</text>
+<line x1="450" y1="558" x2="450" y2="570" stroke="#8b949e" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="572" width="400" height="40" rx="6" fill="#221a00" stroke="#21262d" stroke-width="1.2"/>
+<rect x="250" y="572" width="4" height="40" rx="2" fill="#d29922" stroke="#d29922" stroke-width="0"/>
+<text x="264" y="587" text-anchor="start" fill="#e6edf3" font-size="11" font-weight="600">⑧ Guardrails</text>
+<text x="264" y="602" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">cash-only · position ≤5% NLV · cash ≥10% · ≤3 trades/day</text>
+<line x1="450" y1="612" x2="450" y2="638" stroke="#3fb950" stroke-width="1.5" marker-end="url(#ag)"/>
+<text x="456" y="626" text-anchor="start" fill="#3fb950" font-size="9" font-weight="normal">approved</text>
+<rect x="340" y="640" width="220" height="40" rx="6" fill="#0d2818" stroke="#3fb950" stroke-width="1.5"/>
+<rect x="340" y="640" width="4" height="40" rx="2" fill="#3fb950" stroke="#3fb950" stroke-width="0"/>
+<text x="450" y="656" text-anchor="middle" fill="#e6edf3" font-size="12" font-weight="600">⑨ Execute</text>
+<text x="450" y="671" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="normal">trader orders buy / sell / stop</text>
+<path d="M 250 592 L 190 592 L 190 660 L 178 660" stroke="#f85149" stroke-width="1.5" fill="none" stroke-dasharray="4,3" marker-end="url(#ar)"/>
+<text x="246" y="587" text-anchor="end" fill="#f85149" font-size="9" font-weight="normal">blocked</text>
+<rect x="22" y="640" width="156" height="40" rx="6" fill="#280d0d" stroke="#f85149" stroke-width="1.2"/>
+<text x="100" y="655" text-anchor="middle" fill="#f85149" font-size="10" font-weight="500">✗ Log &amp; Skip</text>
+<text x="100" y="669" text-anchor="middle" fill="#8b949e" font-size="8.5" font-weight="normal">CASH_FLOOR_BLOCK etc.</text>
+<rect x="672" y="194" width="214" height="118" rx="6" fill="#160d22" stroke="#a371f7" stroke-width="1.2" stroke-dasharray="5,3"/>
+<text x="779" y="209" text-anchor="middle" fill="#a371f7" font-size="9.5" font-weight="600">Weekly · Sun 6pm</text>
+<text x="682" y="224" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· Market Top Detector</text>
+<text x="682" y="241" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· Sector Analyst</text>
+<text x="682" y="258" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· Market News Analyst</text>
+<text x="682" y="275" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· Strategy Optimizer</text>
+<text x="682" y="292" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· Performance Review</text>
+<rect x="672" y="324" width="214" height="88" rx="6" fill="#160d22" stroke="#a371f7" stroke-width="1.2" stroke-dasharray="5,3"/>
+<text x="779" y="339" text-anchor="middle" fill="#a371f7" font-size="9.5" font-weight="600">Monthly · 1st Sun 6pm</text>
+<text x="682" y="352" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· Strategy Optimizer</text>
+<text x="682" y="372" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· System Improver</text>
+<text x="682" y="392" text-anchor="start" fill="#8b949e" font-size="8.5" font-weight="normal">· Decision quality audit + self-improvement</text>
+<path d="M 580 146 L 630 146 L 630 253 L 672 253" stroke="#a371f7" stroke-width="1.2" fill="none" stroke-dasharray="4,3" marker-end="url(#ap)"/>
+<text x="584" y="141" text-anchor="start" fill="#a371f7" font-size="8" font-weight="normal">weekly / monthly</text>
+</svg>
