@@ -16,6 +16,7 @@ You receive a JSON context containing:
 - `recent_log` — avoid re-proposing the same ticker traded in the last 24 hours
 - `guardrails` — position sizing limits
 - `time_slot` — active market context: `eu-pre-market`, `eu-market`, `eu-us-overlap`, `us-market`
+- `geo_context` — geopolitical scan result from conductor: `{severity, affected_sectors, affected_tickers, block_new_longs}`
 - `force_refresh` — (optional) true to force a universe refresh regardless of cache age
 - `bootstrap` — (optional) true on first run with empty portfolio; propose full initial allocation
 
@@ -71,8 +72,14 @@ US-listed ETFs (SPY, QQQ, IWM, XLE, XLF, etc.) are **NOT tradeable** from this E
 
 ## Workflow
 
-### Step 1 — Macro filter
+### Step 1 — Geo + Macro filter
 
+**First, apply geo_context hard gates:**
+- If `geo_context.block_new_longs = true` → return `[]` immediately. Log reason.
+- If `geo_context.severity = "Medium"` → record `excluded_sectors = geo_context.affected_sectors`; these will be filtered in Step 4
+- If `geo_context.severity = "Low"/"None"` → no exclusions; proceed normally
+
+**Then run macro filter:**
 ```bash
 uv run trader strategies signals --tickers IWDA,CSPX,EQQQ --strategy ma_cross
 uv run trader news sentiment IWDA --lookback 48h
@@ -218,6 +225,8 @@ Drop if:
 - News sentiment < -0.3
 - Already held and up > 30% from cost
 - Same ticker in recent_log within last 24h
+- Ticker's sector is in `excluded_sectors` (from geo_context Medium severity)
+- Ticker is in `geo_context.affected_tickers` and sentiment < 0
 
 Log:
 ```bash
@@ -299,9 +308,14 @@ uv run trader watchlist add TICKER --list momentum
       "name": "ASML breakout pivot"
     },
     "proposed_command": "uv run trader orders buy ASML 3 --type limit --price 720.00",
-    "reason": "Near 52w high on XETRA and LSE scans. MA cross hold, RSI 62. Sentiment +0.4. Semiconductor (profile match)."
+    "reason": "Near 52w high on XETRA and LSE scans. MA cross hold, RSI 62. Sentiment +0.4. Semiconductor (profile match).",
+    "geo_flag": null
   }
 ]
+
+// If geo_context.severity = Medium and ticker is adjacent to (but not in) affected sectors, set:
+// "geo_flag": "adjacent to affected sector: energy — monitor for spillover"
+// This surfaces as a caution note to the conductor without blocking the trade.
 ```
 
 If no high-conviction opportunities exist: `[]`

@@ -21,12 +21,13 @@
   "preferred_sectors": [
     "energy",
     "emerging_markets",
+    "quantum computing",
     "semiconductors",
     "defense"
   ],
   "sector_note": "agents may screen and invest in other sectors when signals are strong — these are starting bias, not exclusions",
   "portfolio_targets": {
-    "max_single_position_pct": 10,
+    "max_single_position_pct": 5,
     "max_sector_concentration_pct": 35,
     "max_new_positions_per_day": 3,
     "target_cash_reserve_pct": 10,
@@ -34,8 +35,12 @@
   },
   "options_preferences": {
     "allowed_strategies": [
-      "covered_call", "cash_secured_put", "spreads",
-      "iron_condor", "directional", "earnings_plays"
+      "covered_call",
+      "cash_secured_put",
+      "spreads",
+      "iron_condor",
+      "directional",
+      "earnings_plays"
     ],
     "max_options_portfolio_pct": 20
   },
