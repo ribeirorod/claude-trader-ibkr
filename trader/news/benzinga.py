@@ -12,12 +12,12 @@ class BenzingaClient:
 
     async def get_news(self, tickers: list[str], limit: int = 10) -> list[NewsItem]:
         params = {
-            "tickers": ",".join(tickers),
+            "token": self._token,
+            "symbols": ",".join(tickers),
             "pageSize": limit,
             "displayOutput": "abstract",
         }
-        headers = {"Authorization": f"Token {self._token}"}
-        r = await self._http.get(f"{self.BASE}/news", params=params, headers=headers)
+        r = await self._http.get(f"{self.BASE}/news", params=params, headers={"Accept": "application/json"})
         r.raise_for_status()
         items = []
         for n in r.json():
