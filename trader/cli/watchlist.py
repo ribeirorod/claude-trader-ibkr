@@ -149,7 +149,6 @@ def show(ctx, list_name, signals):
                 from trader.news.benzinga import BenzingaClient
                 from trader.news.sentiment import SentimentScorer
 
-                strategy = get_strategy("rsi")
                 benzinga = BenzingaClient(ctx.obj["config"])
                 scorer = SentimentScorer()
 
@@ -157,7 +156,6 @@ def show(ctx, list_name, signals):
                     try:
                         news = await benzinga.get_news([ticker], limit=5)
                         sentiment = scorer.score(news)
-                        sig = strategy.signal([])  # placeholder — no price history here
                         return {"ticker": ticker, "sentiment": sentiment}
                     except Exception:
                         return {"ticker": ticker, "sentiment": 0.0}
