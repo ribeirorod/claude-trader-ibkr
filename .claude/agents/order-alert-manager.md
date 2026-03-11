@@ -43,6 +43,8 @@ If signal has reversed (was buy, now sell/neutral) → emit `NO_ACTION` with rea
 
 For each open order in `open_orders`:
 
+**Orphaned stop/take-profit check (run first):** If the order is a SELL (stop, limit-sell, trailing-stop) AND there is no open position for that ticker AND there is no open BUY order for that ticker → emit `CANCEL_ORDER` with reason "Orphaned sell order: no position or pending buy exists". This handles the case where the corresponding buy limit expired without filling (e.g. DAY TIF orders overnight).
+
 **Signal health check:** Check if the strategy signal has reversed for that ticker since the order was placed. Use MA cross to confirm trend:
 ```bash
 uv run trader strategies signals --tickers TICKER --strategy ma_cross
