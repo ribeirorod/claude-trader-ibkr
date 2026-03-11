@@ -29,7 +29,7 @@ Calculate each as % of `net_liquidation`.
 | Single position | >10% | >15% |
 | Single sector | >30% | >35% |
 | Top 3 positions | >45% | >55% |
-| Cash below target | <5% | <2% |
+| Cash below target | <5% | <10% (hard floor — block new buys) |
 
 ### 3. Drift from profile targets
 Compare current allocation to `profile.portfolio_targets`.

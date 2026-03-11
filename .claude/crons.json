@@ -1,26 +1,50 @@
 [
   {
-    "id": "pre-market",
+    "id": "eu-pre-market",
     "cron": "3 8 * * 1-5",
-    "label": "Weekdays 8:03am — pre-market",
+    "label": "Weekdays 8:03am CET — EU pre-market",
     "agent": "portfolio-conductor",
-    "slot": "pre-market",
-    "prompt": "Run pre-market portfolio analysis. You are the portfolio-conductor agent. Time slot: pre-market. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account summary`, `uv run trader orders list --status open` to fetch live snapshot; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json` for profile; (4) dispatch risk-monitor, portfolio-health, and opportunity-finder agents with full context; (5) review proposals, log ORDER_INTENT for each approved trade, execute in autonomous mode; (6) log RUN_END to .trader/logs/agent.jsonl."
+    "slot": "eu-pre-market",
+    "prompt": "Run EU pre-market portfolio analysis. You are the portfolio-conductor agent. Time slot: eu-pre-market (8am CET, European exchanges open at 9am CET). Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account summary`, `uv run trader orders list --status open` to fetch live snapshot; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json` for profile; (4) dispatch risk-monitor (if positions exist), portfolio-health, and opportunity-finder scoped to EU exchanges (Euronext, XETRA, LSE) and EU-listed UCITS ETFs — note: US-listed ETFs like SPY/QQQ are NOT tradeable from this EU account (MiFID II KID restriction), use UCITS equivalents (CSPX, VUSA, IUSA, etc.); (5) review proposals, log ORDER_INTENT for each approved trade, execute in autonomous mode; (6) log RUN_END to .trader/logs/agent.jsonl."
   },
   {
-    "id": "intraday",
-    "cron": "7 9-16 * * 1-5",
-    "label": "Weekdays 9am–4pm hourly — intraday",
+    "id": "eu-market",
+    "cron": "7 9-15 * * 1-5",
+    "label": "Weekdays 9:07am–3:07pm CET (EU market hours + US pre-market) — hourly",
     "agent": "portfolio-conductor",
-    "slot": "intraday",
-    "prompt": "Run intraday portfolio check. You are the portfolio-conductor agent. Time slot: intraday. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader account summary`, `uv run trader orders list --status open`; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json`; (4) always dispatch risk-monitor and portfolio-health; dispatch opportunity-finder only if no opportunity signal was logged in the last 4 hours; (5) review proposals, log ORDER_INTENT, execute in autonomous mode; (6) if nothing actionable, log RUN_END with do_nothing:true and exit."
+    "slot": "eu-market",
+    "prompt": "Run EU market hours portfolio check. You are the portfolio-conductor agent. Time slot: eu-market (9am–3:30pm CET; EU exchanges open, US pre-market active from 10am CET). Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader account summary`, `uv run trader orders list --status open`; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json`; (4) always dispatch risk-monitor (if positions exist) and portfolio-health; dispatch opportunity-finder for EU stocks AND US pre-market signals — only if no opportunity signal logged in last 4 hours; note: US-listed ETFs (SPY/QQQ) not tradeable from EU account — use UCITS equivalents; (5) review proposals, log ORDER_INTENT, execute in autonomous mode; (6) if nothing actionable, log RUN_END with do_nothing:true and exit."
+  },
+  {
+    "id": "eu-us-overlap",
+    "cron": "3 15 * * 1-5",
+    "label": "Weekdays 3:03pm CET (EU+US overlap opens at 3:30pm) — highest liquidity",
+    "agent": "portfolio-conductor",
+    "slot": "eu-us-overlap",
+    "prompt": "Run EU+US market overlap portfolio check. You are the portfolio-conductor agent. Time slot: eu-us-overlap (3:30–5:30pm CET; both EU and US markets open — highest liquidity window of the day). Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account summary`, `uv run trader orders list --status open`; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json`; (4) dispatch risk-monitor (if positions exist), portfolio-health, and opportunity-finder for BOTH EU and US universes — this is the highest-priority window for entries and exits; note: US-listed ETFs not tradeable from EU account; (5) review proposals, log ORDER_INTENT, execute in autonomous mode; (6) log RUN_END to .trader/logs/agent.jsonl."
+  },
+  {
+    "id": "us-market",
+    "cron": "7 17-21 * * 1-5",
+    "label": "Weekdays 5:07pm–9:07pm CET (US market only, EU closed) — hourly",
+    "agent": "portfolio-conductor",
+    "slot": "us-market",
+    "prompt": "Run US market hours portfolio check. You are the portfolio-conductor agent. Time slot: us-market (5:30pm–10pm CET; EU closed, US-only trading). Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader account summary`, `uv run trader orders list --status open`; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null` for history; (3) run `cat .trader/profile.json`; (4) always dispatch risk-monitor (if positions exist) and portfolio-health; dispatch opportunity-finder scoped to US exchanges only — only if no opportunity signal logged in last 4 hours; note: US-listed ETFs (SPY/QQQ/IWM) not tradeable from EU account (MiFID II KID restriction); (5) review proposals, log ORDER_INTENT, execute in autonomous mode; (6) if nothing actionable, log RUN_END with do_nothing:true and exit."
   },
   {
     "id": "weekly",
     "cron": "3 18 * * 0",
-    "label": "Sunday 6:03pm — weekly review",
+    "label": "Sunday 6:03pm CET — weekly review",
     "agent": "portfolio-conductor",
     "slot": "weekly",
-    "prompt": "Run weekly portfolio deep review. You are the portfolio-conductor agent. Time slot: weekly. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account summary`; (2) run `tail -50 .trader/logs/agent.jsonl 2>/dev/null`; (3) run `cat .trader/profile.json`; (4) dispatch portfolio-health for deep weekly review (HHI, top positions RSI+sentiment); dispatch strategy-optimizer to backtest and refresh params; skip opportunity-finder this slot; (5) log all proposals and any rebalance recommendations to .trader/logs/agent.jsonl; (6) execute any approved rebalancing trades in autonomous mode; (7) log RUN_END with weekly summary."
+    "prompt": "Run weekly portfolio deep review. You are the portfolio-conductor agent. Time slot: weekly. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account balance`; (2) run `tail -100 .trader/logs/agent.jsonl 2>/dev/null`; (3) run `cat .trader/profile.json`; (4) dispatch portfolio-health for deep weekly review (HHI, top positions RSI+sentiment); dispatch strategy-optimizer to backtest and refresh params; (5) PERFORMANCE REVIEW: scan agent.jsonl for ORDER_INTENT events from the past 7 days, match each ticker to current positions or portfolio_evolution.jsonl, compute win rate and average unrealized P&L, log as PERFORMANCE_REVIEW event to agent.jsonl; (6) log all proposals and any rebalance recommendations; (7) execute any approved rebalancing trades in autonomous mode; (8) log RUN_END with weekly summary including win_rate and orders_placed."
+  },
+  {
+    "id": "monthly",
+    "cron": "3 18 1-7 * 0",
+    "label": "1st Sunday of month 6:03pm CET — monthly self-improvement",
+    "agent": "portfolio-conductor",
+    "slot": "monthly",
+    "prompt": "Run monthly system self-improvement review. You are the portfolio-conductor agent. Time slot: monthly. Working directory: /Users/beam/projects/vibe/trader. Steps: (1) run `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account balance`; (2) run `tail -200 .trader/logs/agent.jsonl 2>/dev/null` and `tail -90 .trader/logs/portfolio_evolution.jsonl 2>/dev/null`; (3) run `cat .trader/profile.json`; (4) dispatch strategy-optimizer with 30-day review window; (5) dispatch system-improver with full context (snapshot, profile, agent_mode, review_window=30) — it will audit decision quality, evaluate whether current metrics and thresholds are still appropriate, identify signal patterns in wins vs losses, and either write proposals to .trader/logs/improvement_proposals.jsonl (supervised) or apply high-confidence changes directly (autonomous); (6) log RUN_END with monthly_review:true and improvements_applied count."
   }
 ]
