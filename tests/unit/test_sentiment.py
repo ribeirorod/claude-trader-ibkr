@@ -1,9 +1,10 @@
+from datetime import datetime, timezone
 from trader.news.sentiment import SentimentScorer
 from trader.models import NewsItem
 
 def make_item(headline: str, summary: str = "") -> NewsItem:
     return NewsItem(id="1", ticker="AAPL", headline=headline,
-                    summary=summary, published_at="2026-03-10T10:00:00Z")
+                    summary=summary, published_at=datetime.now(timezone.utc).isoformat())
 
 def test_bullish_signal():
     scorer = SentimentScorer()
