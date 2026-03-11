@@ -180,54 +180,27 @@ Edit `.trader/profile.json` to adjust risk tolerance, preferred sectors, and pos
 
 ## Workflow Diagram
 
-```mermaid
-flowchart TD
-    subgraph Crons["Scheduled Triggers (CET)"]
-        direction LR
-        EU_PRE["EU Pre-market\n8:03am"]
-        EU_MKT["EU Market\n9am–3pm hourly"]
-        OVERLAP["EU+US Overlap\n3:03pm"]
-        US_MKT["US Market\n5–9pm hourly"]
-        WKL["Weekly\nSun 6pm"]
-        MON["Monthly\n1st Sun 6pm"]
-    end
+![Autonomous Portfolio Conductor Workflow](docs/assets/workflow.svg)
 
-    CONDUCTOR["🎯 Portfolio Conductor\nOnly agent that places orders"]
+---
 
-    EU_PRE & EU_MKT & OVERLAP & US_MKT & WKL & MON --> CONDUCTOR
+## Portfolio Stats
 
-    CONDUCTOR --> SNAP["① Live Snapshot\npositions · cash · open orders\n→ portfolio_evolution.jsonl"]
+> Demo data — run `uv run trader report --save-assets` to regenerate with your real account data, then commit the updated `docs/assets/` files.
 
-    SNAP --> GATES
-    subgraph GATES["② Session Open Gates (once/day)"]
-        CAL["📅 Economic Calendar\n→ risk_mode: NORMAL or ELEVATED"]
-        GEO["🌍 Geo Scan\n→ geo_context: severity · affected sectors"]
-    end
+<p align="center">
+  <img src="docs/assets/equity_curve.svg" width="65%"/>
+  <img src="docs/assets/allocation.svg" width="34%"/>
+</p>
+<p align="center">
+  <img src="docs/assets/pnl_trades.svg" width="65%"/>
+  <img src="docs/assets/drawdown.svg" width="34%"/>
+</p>
 
-    GATES --> NEWS["③ Market News Analyst\nheld tickers + watchlist\n→ news_context per ticker"]
-
-    NEWS --> RISK["④ Risk Monitor\nnews_context + geo_context\n→ stop / trim proposals"]
-
-    RISK --> HEALTH["⑤ Portfolio Health\nconcentration · drift · HHI\n→ rebalance proposals"]
-
-    HEALTH --> OPP{"⑥ Opportunity Finder\nEU stocks · US stocks · UCITS ETFs · Options\nskipped if ELEVATED risk or geo block"}
-
-    OPP --> OAM["⑦ Order Alert Manager\nalert lifecycle · dedup · bracket entries\n→ action list"]
-
-    OAM --> GRD{"⑧ Guardrails\ncash only — no buying_power\nposition ≤ 5% NLV\ncash ≥ 10% NLV\n≤ 3 new positions/day"}
-
-    GRD -->|approved| INTENT["📝 Log ORDER_INTENT"]
-    GRD -->|blocked| NOOP["Log reason · do_nothing"]
-
-    INTENT --> EXEC["⑨ Execute\ntrader orders buy / sell / stop"]
-
-    subgraph PERIODIC["Periodic Deep Reviews"]
-        direction LR
-        WA["Weekly — Sunday\nMarket Top Detector\nSector Analyst\nStrategy Optimizer\nPerformance Review"]
-        MA["Monthly — 1st Sunday\nStrategy Optimizer\nSystem Improver\ndecision quality · self-improvement"]
-    end
-
-    WKL & MON -.-> PERIODIC
+```bash
+uv run trader report               # generates outputs/report.html
+uv run trader report --save-assets # refreshes docs/assets/ for the README
+uv run trader report --open        # opens report in browser
 ```
 
 ---

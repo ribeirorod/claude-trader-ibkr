@@ -13,3 +13,15 @@ results/
 
 # Agent logs (JSONL — tracked by directory, not content)
 .trader/logs/*.jsonl
+
+clientportal.gw/
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+docs/superpowers/
+.playwright-mcp/*
+.planning/
+.trader/
