@@ -1,136 +1,249 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-03-10
+**Analysis Date:** 2026-03-11
 
 ## Framework
 
-- **Runner:** No automated test runner configured. No `pytest.ini`, `setup.cfg [tool:pytest]`, `pyproject.toml [tool.pytest]`, or `vitest.config.*` detected.
-- **Assertions:** Python built-in `assert` and manual `if/else` result checks (no assertion library like `pytest` or `unittest` is actively configured).
+- **Runner:** `pytest` >= 8 — Config in `pyproject.toml` under `[tool.pytest.ini_options]`
+- **Async support:** `pytest-asyncio` >= 0.23 with `asyncio_mode = "auto"` — all `async` test functions run automatically without `@pytest.mark.asyncio` decorator (though some files still include it explicitly)
+- **HTTP mocking:** `respx` >= 0.21 — used to mock `httpx` requests in transport-layer tests
+- **Mock/patch:** `unittest.mock` (`AsyncMock`, `patch`) — built-in, no additional library needed
+- **CLI testing:** `click.testing.CliRunner` — invokes CLI commands without subprocess, captures stdout
+- **Test data generation:** `pytest` `monkeypatch` fixture for env vars; `tmp_path` for temporary files
 - **Commands:**
-  - Import validation: `python tests/test_imports.py`
-  - MVP smoke test: `python tests/tests_manual_mvp_smoke.py`
-  - Integration test: `bash run_test.sh` (runs `examples/simple_integration_test.py`)
-  - IBKR asset scan test: `python test_ibkr_all_assets.py`
-  - Strategy optimizer test: `python volatility/composer/test_optimiser.py`
+  - Run all tests: `uv run pytest`
+  - Run unit tests only: `uv run pytest tests/unit/`
+  - Run agent tests: `uv run pytest tests/agents/`
+  - Run with coverage: `uv run pytest --cov=trader tests/`
 
 ## Organization
 
-- **Location:** Test files live in three places:
-  - `tests/` — formal test directory, 2 files
-  - Project root — `test_ibkr_all_assets.py` (integration/exploratory, lives at root)
-  - `volatility/composer/test_optimiser.py` — strategy-level test, co-located with the module it exercises
-- **Naming:** Files are prefixed with `test_` (e.g., `test_imports.py`, `test_ibkr_all_assets.py`). One exception: `tests/tests_manual_mvp_smoke.py` uses plural prefix. Use `test_` prefix consistently for new test files.
+```
+tests/
+├── __init__.py
+├── test_imports.py          # Package importability smoke test
+├── test_packaging.py        # Entry point / packaging validation
+├── tests_manual_mvp_smoke.py  # Live broker smoke test (manual only)
+├── agents/
+│   ├── __init__.py
+│   ├── test_context.py      # Agent context builder tests
+│   └── test_log.py          # Agent log JSONL writer tests
+├── integration/
+│   └── __init__.py          # Empty — integration tests not yet implemented
+└── unit/
+    ├── __init__.py
+    ├── test_adapter_base.py       # Adapter ABC contract tests
+    ├── test_benzinga.py           # BenzingaClient with respx HTTP mocking
+    ├── test_cli_account.py        # CLI account commands via CliRunner
+    ├── test_cli_orders.py         # CLI order commands via CliRunner
+    ├── test_cli_root.py           # CLI root group (--help, unknown command)
+    ├── test_cli_strategies.py     # CLI strategies commands via CliRunner
+    ├── test_config.py             # Config dataclass env var loading
+    ├── test_ibkr_rest_adapter.py  # IBKRRestAdapter with AsyncMock patches
+    ├── test_ibkr_rest_client.py   # IBKRRestClient HTTP layer with respx
+    ├── test_ibkr_tws_adapter.py   # IBKRTWSAdapter tests
+    ├── test_models.py             # Pydantic model field/validation tests
+    ├── test_optimizer.py          # Strategy optimizer unit tests
+    ├── test_risk_filter.py        # Risk filter logic tests
+    ├── test_sentiment.py          # Sentiment analyzer tests
+    └── test_strategies.py         # Strategy signal shape/value tests
+```
+
+- **Location:** All automated tests in `tests/` — not co-located with source.
+- **Naming:** `test_{module_or_concern}.py`. Test functions always `test_` prefixed. Test grouping by CLI command group or package module.
+- **`tests/manual_mvp_smoke.py`:** Requires live IBKR connection — do not run in CI.
 
 ## Patterns
 
-There are two distinct testing patterns in use:
+### Pattern 1 — Pydantic model validation tests (no I/O)
 
-**Pattern 1 — Import validation (no live connection):**
 ```python
-# tests/test_imports.py
-def test_imports():
-    try:
-        from vibe import Trader, Scheduler
-        print("✓ vibe.Trader imported")
-    except Exception as e:
-        print(f"✗ Failed to import vibe: {e}")
-        return False
-    return True
+# tests/unit/test_models.py
+def test_order_request_stock():
+    req = OrderRequest(ticker="AAPL", qty=10, side="buy", order_type="market")
+    assert req.contract_type == "stock"
+    assert req.price is None
 
-if __name__ == "__main__":
-    success = test_imports()
-    sys.exit(0 if success else 1)
+def test_sentiment_result_signal():
+    r = SentimentResult(ticker="AAPL", score=0.5, signal="bullish",
+                        article_count=5, lookback_hours=24, top_headlines=[])
+    data = r.model_dump()
+    assert "score" in data
 ```
-This pattern tests that the module graph is importable without credentials or live services. It is the only test that can run in CI without a broker connection.
 
-**Pattern 2 — Manual smoke test (requires live IBKR connection):**
+### Pattern 2 — Strategy signal tests (pure function, generated fixture data)
+
 ```python
-# tests/tests_manual_mvp_smoke.py
-async def main():
-    load_dotenv()
-    trader = Trader()
-    try:
-        r1 = await trader.buy("AAPL", quantity=1, order_type="market")
-        results["market_buy"] = r1.status
-        # ... additional calls
-        print("SMOKE_RESULTS:", results)
-    finally:
-        await trader.close()
+# tests/unit/test_strategies.py
+def make_ohlcv(n=100) -> pd.DataFrame:
+    np.random.seed(42)
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    return pd.DataFrame({
+        "open": close * 0.99, "high": close * 1.01,
+        "low": close * 0.98, "close": close, "volume": 1000000,
+    })
 
-if __name__ == "__main__":
-    asyncio.run(main())
+def test_rsi_signals_shape():
+    strat = RSIStrategy({"period": 14, "oversold": 30, "overbought": 70})
+    df = make_ohlcv()
+    signals = strat.signals(df)
+    assert len(signals) == len(df)
+    assert set(signals.unique()).issubset({-1, 0, 1})
 ```
-This pattern exercises the full happy path against a paper-trading IBKR account. There is no assertion framework — results are printed and inspected manually.
 
-**Pattern 3 — Numbered integration tests with structlog output:**
+Strategies return a `pd.Series` of `{-1, 0, 1}`. Always assert shape and value set.
+
+### Pattern 3 — Adapter tests with `patch.object` + `AsyncMock`
+
 ```python
-# examples/simple_integration_test.py
-async def test_data_fetching():
-    """Test 1: Fetch historical data from IBKR."""
-    log.info("test_started", test="Data Fetching from IBKR", test_number=1)
-    try:
-        df = await fetcher.fetch_data_async('AAPL', start_date='2024-01-01', interval='1d')
-        if not df.empty:
-            log.info("data_fetched_success", rows=len(df))
-            return True
-        return False
-    except Exception as e:
-        log.error("data_fetch_error", error=str(e))
-        return False
-    finally:
-        await fetcher.close()
+# tests/unit/test_ibkr_rest_adapter.py
+@pytest.fixture
+def adapter():
+    config = Config()
+    config.ib_account = "DU123456"
+    return IBKRRestAdapter(config)
+
+@pytest.mark.asyncio
+async def test_list_positions(adapter):
+    mock_data = [{"conid": 265598, "ticker": "AAPL", "position": 10,
+                  "avgCost": 190.0, "mktValue": 1950.0, "unrealizedPnl": 50.0}]
+    with patch.object(adapter._client, "get", new=AsyncMock(return_value=mock_data)):
+        positions = await adapter.list_positions()
+    assert len(positions) == 1
+    assert positions[0].ticker == "AAPL"
 ```
-Each test function returns `True`/`False`. Results are collected in a list and summarised at the end. Not compatible with pytest (no `assert`, no fixture injection).
+
+Patch `adapter._client.get` / `adapter._client.post` using `patch.object(..., new=AsyncMock(...))`.
+
+### Pattern 4 — HTTP transport tests with `respx`
+
+```python
+# tests/unit/test_ibkr_rest_client.py
+@pytest.mark.asyncio
+async def test_get_request(client):
+    with respx.mock:
+        respx.get("https://localhost:5000/v1/api/test").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        result = await client.get("/test")
+        assert result == {"ok": True}
+```
+
+Use `respx.mock` as a context manager. Always provide the full URL (scheme + host + port + path).
+
+### Pattern 5 — CLI tests with `CliRunner` + `patch`
+
+```python
+# tests/unit/test_cli_orders.py
+def test_buy_market_order():
+    runner = CliRunner()
+    with patch("trader.adapters.ibkr_rest.adapter.IBKRRestAdapter.connect", new=AsyncMock()), \
+         patch("trader.adapters.ibkr_rest.adapter.IBKRRestAdapter.place_order",
+               new=AsyncMock(return_value=mock_order())), \
+         patch("trader.adapters.ibkr_rest.adapter.IBKRRestAdapter.disconnect", new=AsyncMock()):
+        result = runner.invoke(cli, ["orders", "buy", "AAPL", "10"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["order_id"] == "ord_1"
+```
+
+Always:
+1. Mock `connect`, the relevant adapter method, and `disconnect` as `AsyncMock`.
+2. `assert result.exit_code == 0, result.output` — include `result.output` in the failure message.
+3. `json.loads(result.output)` — verify stdout is valid JSON and assert on fields.
+
+### Pattern 6 — Config tests with `monkeypatch`
+
+```python
+# tests/unit/test_config.py
+def test_config_defaults(monkeypatch):
+    monkeypatch.delenv("IB_PORT", raising=False)
+    c = Config()
+    assert c.ib_port == 5000
+
+def test_config_from_env(monkeypatch):
+    monkeypatch.setenv("IB_PORT", "7497")
+    c = Config()
+    assert c.ib_port == 7497
+```
+
+Always `delenv` with `raising=False` to handle missing keys. Never read env directly in tests — use `monkeypatch`.
+
+### Pattern 7 — Agent tests with `tmp_path` fixture
+
+```python
+# tests/agents/test_context.py
+@pytest.fixture
+def profile_file(tmp_path):
+    p = tmp_path / "profile.json"
+    p.write_text(json.dumps({...}))
+    return p
+
+def test_load_profile(profile_file):
+    profile = load_profile(profile_file)
+    assert profile["risk_tolerance"] == "moderate"
+```
+
+Use `tmp_path` for any test that reads/writes files. Never use hardcoded paths in tests.
 
 ## Mocking
 
-- **Framework:** None configured. No `unittest.mock`, `pytest-mock`, or similar library is used.
-- **What to mock:** IBKR connection (`IB().connectAsync`) is the primary candidate for mocking in unit tests. The `TTLIdempotencyMap` in `vibe/utils.py` and `_build_order` in `vibe/venues/ibkr.py` are pure/sync and can be unit-tested without mocking.
-- **What NOT to mock:** Strategy execution (`volatility/composer/strategies/`) operates on DataFrames and requires no external services — test these with real fixture data directly.
-- **Current reality:** No mocking exists. All tests require either a paper-trading IBKR connection on `127.0.0.1:7497` or skip broker tests entirely.
+- **Framework:** `unittest.mock` — `AsyncMock` for all async methods, `MagicMock` for sync.
+- **HTTP layer:** `respx` for `httpx`-based clients (`BenzingaClient`, `IBKRRestClient`). Use `respx.mock` context manager.
+- **Adapter layer:** `patch.object(adapter._client, "get", new=AsyncMock(...))` — patch the internal `_client` methods, not the adapter methods themselves, for adapter-level tests.
+- **CLI layer:** Patch at the fully-qualified class path `"trader.adapters.ibkr_rest.adapter.IBKRRestAdapter.method_name"` when testing CLI commands.
+- **What to mock:** IBKR gateway HTTP calls, Benzinga HTTP calls, `connect`/`disconnect` lifecycle.
+- **What NOT to mock:** Pydantic model construction, strategy signal computation on DataFrames, `Config` dataclass field access, `click` CLI routing.
 
 ## Fixtures & Test Data
 
-- **Location:** No dedicated fixtures directory. Test data is fetched live from IBKR or yFinance during test execution.
-- **CSV outputs used as inputs:** Portfolio scripts read from `outputs/portfolio.csv` and `outputs/history.csv`. These CSVs serve as implicit test fixtures for `portfolio_run_strategy.py` and `portfolio_optimise_strategies.py`.
-- **Strategy optimizer test uses live yFinance data:**
-  ```python
-  # volatility/composer/test_optimiser.py
-  fetcher = YFinanceDataFetcher(tickers=["AAPL"])
-  stock_data = fetcher.fetch_stock_data(start_date, end_date)
-  ```
-  No caching or recorded responses — each run hits the network.
+- **Location:** Inline within test files (no shared `conftest.py` fixtures across directories; each subdirectory has its own `__init__.py`).
+- **OHLCV data:** Generated inline using `numpy` with `np.random.seed(42)` for reproducibility (see `tests/unit/test_strategies.py`).
+- **Model fixtures:** Inline factory functions like `mock_order(**kwargs)` that construct Pydantic models.
+- **File fixtures:** `tmp_path` pytest built-in — used in `tests/agents/test_context.py` for profile JSON files.
+- **No recorded HTTP responses:** `respx` mocks are defined inline per test. No cassette/VCR-style fixtures.
 
 ## Coverage
 
-- **Target:** None enforced. No coverage configuration detected.
-- **Command:** Not configured. To run with coverage manually: `python -m pytest tests/ --cov=vibe`
+- **Target:** None enforced. No `[tool.coverage]` configuration in `pyproject.toml`.
+- **Command:** `uv run pytest --cov=trader tests/`
+- **Dev deps:** `pytest`, `pytest-asyncio`, `respx`, `pytest-mock` declared under `[project.optional-dependencies] dev` in `pyproject.toml`.
 
 ## Test Types
 
-- **Unit:** Not formally implemented. `tests/test_imports.py` is the closest — it validates module structure without I/O.
-- **Integration (manual smoke):** `tests/tests_manual_mvp_smoke.py` and `examples/simple_integration_test.py` — require live paper-trading IBKR on localhost.
-- **Strategy backtest / optimizer test:** `volatility/composer/test_optimiser.py` — exercises the optimization loop against yFinance data. Requires internet access. Not a pytest test.
-- **Asset discovery / exploratory:** `test_ibkr_all_assets.py` — long-running IBKR scanner test. Saves results to `outputs/ibkr_assets/`. Not repeatable without a connection.
-- **E2E:** Not implemented as a dedicated suite. The `examples/simple_integration_test.py` effectively covers E2E flows but requires manual gate (`input("Press ENTER to continue")`).
+- **Unit (automated):** `tests/unit/` — 15 test files. Covers models, config, adapters (mocked), CLI commands (mocked), strategies (DataFrame fixture), HTTP clients (respx).
+- **Agent (automated):** `tests/agents/` — covers `build_context` and agent log writer with `tmp_path` fixtures.
+- **Integration (stub):** `tests/integration/` — directory exists with `__init__.py` only; no tests implemented yet.
+- **Manual smoke:** `tests/tests_manual_mvp_smoke.py` — requires live IBKR paper trading connection. Not run by pytest automatically; run directly with `uv run python tests/tests_manual_mvp_smoke.py`.
+- **E2E:** Not implemented as an automated suite.
 
-## Running Tests Without IBKR
+## pytest Configuration (`pyproject.toml`)
 
-The only test that runs without a live broker connection is:
-
-```bash
-source .venv/bin/activate
-python tests/test_imports.py
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
 ```
 
-All other tests require IBKR TWS or IB Gateway running locally on the port configured in `.env` (default `IB_PORT=7497`).
+`asyncio_mode = "auto"` means `async def test_*` functions run automatically. The `@pytest.mark.asyncio` decorator is redundant but harmless when included.
 
-## Environment Setup for Tests
-
-Tests read credentials from `.env` via `python-dotenv`. Copy `.env.example` and populate before running any broker-connected test:
+## Running Tests
 
 ```bash
-cp .env.example .env
-# Set IB_HOST, IB_PORT, IB_CLIENT_ID, IB_ACCOUNT
-source .venv/bin/activate
+# All automated tests (no broker required)
+uv run pytest
+
+# Unit tests only
+uv run pytest tests/unit/
+
+# Agent tests
+uv run pytest tests/agents/
+
+# Specific test file
+uv run pytest tests/unit/test_cli_orders.py -v
+
+# With coverage report
+uv run pytest --cov=trader --cov-report=term-missing tests/
 ```
+
+No live IBKR connection is required for any test in `tests/unit/` or `tests/agents/`. All broker I/O is mocked.

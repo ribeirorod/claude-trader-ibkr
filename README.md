@@ -153,24 +153,82 @@ All commands support `--help` for full options.
 
 ## Autonomous Agent
 
-The portfolio conductor runs on a cron schedule and dispatches specialist agents:
+The portfolio conductor runs on a cron schedule and dispatches specialist agents. All times are CET.
 
 | Schedule | Slot | What runs |
 |----------|------|-----------|
-| Weekdays 8:03am ET | pre-market | risk-monitor, portfolio-health, opportunity-finder |
-| Weekdays 9am–4pm ET hourly | intraday | risk-monitor, portfolio-health, opportunity-finder (if stale) |
-| Sundays 6pm | weekly | portfolio-health deep review, strategy-optimizer, performance review |
-| 1st Sunday of month | monthly | strategy-optimizer, system-improver (self-improvement) |
+| Weekdays 8:03am | eu-pre-market | calendar gate → geo scan → news analyst → risk-monitor → portfolio-health → opportunity-finder (EU) → order-alert-manager |
+| Weekdays 9am–3pm hourly | eu-market | risk-monitor → portfolio-health → opportunity-finder (EU + US pre-market) if stale |
+| Weekdays 3:03pm | eu-us-overlap | full dispatch — both EU and US universes, highest liquidity window |
+| Weekdays 5–9pm hourly | us-market | calendar gate → geo scan → news analyst → risk-monitor → portfolio-health → opportunity-finder (US) if stale |
+| Sundays 6pm | weekly | market-top-detector → sector-analyst → market-news-analyst → portfolio-health → strategy-optimizer → performance review |
+| 1st Sunday of month | monthly | strategy-optimizer → system-improver (decision quality audit + self-improvement) |
 
-Logs are written to `.trader/logs/agent.jsonl`. Portfolio snapshots for evolution tracking are written to `.trader/logs/portfolio_evolution.jsonl`.
+Logs: `.trader/logs/agent.jsonl` — every decision, intent, and order.
+Snapshots: `.trader/logs/portfolio_evolution.jsonl` — timestamped NLV/position state on every run.
 
-**Guardrails (hardcoded):**
-- Never uses margin — all sizing based on `cash`, never `buying_power`
-- Cash floor: no new buys if cash < 10% of net liquidation
-- Single position cap: 10% of net liquidation
-- No more than 3 new positions per day
+**Guardrails (enforced on every proposed trade):**
+- Never uses margin — all sizing uses `cash`, never `buying_power`
+- Cash floor: no new buys if cash < 10% of net liquidation (`CASH_FLOOR_BLOCK`)
+- Single position cap: configurable in `profile.json` (default 5% NLV)
+- Max 3 new positions per day
+- `risk_mode=ELEVATED` (2+ high-impact calendar events): position sizes halved, no new entries
 
 Edit `.trader/profile.json` to adjust risk tolerance, preferred sectors, and position limits.
+
+---
+
+## Workflow Diagram
+
+```mermaid
+flowchart TD
+    subgraph Crons["Scheduled Triggers (CET)"]
+        direction LR
+        EU_PRE["EU Pre-market\n8:03am"]
+        EU_MKT["EU Market\n9am–3pm hourly"]
+        OVERLAP["EU+US Overlap\n3:03pm"]
+        US_MKT["US Market\n5–9pm hourly"]
+        WKL["Weekly\nSun 6pm"]
+        MON["Monthly\n1st Sun 6pm"]
+    end
+
+    CONDUCTOR["🎯 Portfolio Conductor\nOnly agent that places orders"]
+
+    EU_PRE & EU_MKT & OVERLAP & US_MKT & WKL & MON --> CONDUCTOR
+
+    CONDUCTOR --> SNAP["① Live Snapshot\npositions · cash · open orders\n→ portfolio_evolution.jsonl"]
+
+    SNAP --> GATES
+    subgraph GATES["② Session Open Gates (once/day)"]
+        CAL["📅 Economic Calendar\n→ risk_mode: NORMAL or ELEVATED"]
+        GEO["🌍 Geo Scan\n→ geo_context: severity · affected sectors"]
+    end
+
+    GATES --> NEWS["③ Market News Analyst\nheld tickers + watchlist\n→ news_context per ticker"]
+
+    NEWS --> RISK["④ Risk Monitor\nnews_context + geo_context\n→ stop / trim proposals"]
+
+    RISK --> HEALTH["⑤ Portfolio Health\nconcentration · drift · HHI\n→ rebalance proposals"]
+
+    HEALTH --> OPP{"⑥ Opportunity Finder\nEU stocks · US stocks · UCITS ETFs · Options\nskipped if ELEVATED risk or geo block"}
+
+    OPP --> OAM["⑦ Order Alert Manager\nalert lifecycle · dedup · bracket entries\n→ action list"]
+
+    OAM --> GRD{"⑧ Guardrails\ncash only — no buying_power\nposition ≤ 5% NLV\ncash ≥ 10% NLV\n≤ 3 new positions/day"}
+
+    GRD -->|approved| INTENT["📝 Log ORDER_INTENT"]
+    GRD -->|blocked| NOOP["Log reason · do_nothing"]
+
+    INTENT --> EXEC["⑨ Execute\ntrader orders buy / sell / stop"]
+
+    subgraph PERIODIC["Periodic Deep Reviews"]
+        direction LR
+        WA["Weekly — Sunday\nMarket Top Detector\nSector Analyst\nStrategy Optimizer\nPerformance Review"]
+        MA["Monthly — 1st Sunday\nStrategy Optimizer\nSystem Improver\ndecision quality · self-improvement"]
+    end
+
+    WKL & MON -.-> PERIODIC
+```
 
 ---
 

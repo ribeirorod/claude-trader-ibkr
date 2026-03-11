@@ -98,7 +98,59 @@ Determine the slot based on **CET local time** (machine timezone). Account cover
 
 Pass the active slot to all specialist agents so they scope their universe correctly (EU tickers during EU hours, US tickers during US hours, both during overlap).
 
-### 5. Decide workflow
+### 5. Geopolitical scan (session open only)
+
+Run once per trading session — skip if a `GEO_SCAN` event already exists in today's log.
+
+```bash
+# Check if already run today
+grep "GEO_SCAN" .trader/logs/agent.jsonl 2>/dev/null | grep "$(date -u +%Y-%m-%d)" | tail -1
+```
+
+If no result (first run of the day), perform the scan:
+
+```bash
+# Broad index sentiment as a proxy for overnight stress
+uv run trader news sentiment IWDA --lookback 48h
+uv run trader news sentiment CSPX --lookback 48h
+```
+
+Then use web search to check for overnight geopolitical developments:
+- Search: `"markets overnight" site:reuters.com OR site:bloomberg.com`
+- Search: `"geopolitical risk" today site:reuters.com`
+
+Classify severity:
+- **High** — systemic risk, broad market impact (conflict escalation, major sanctions, surprise rate decision)
+- **Medium** — sector-specific, 1-3 weeks elevated volatility
+- **Low / None** — no material developments
+
+Build `geo_context` object:
+```json
+{
+  "severity": "High | Medium | Low | None",
+  "events": ["brief description"],
+  "affected_sectors": ["energy", "semiconductors", "defense"],
+  "affected_tickers": ["ASML", "NVDA"],
+  "block_new_longs": false,
+  "hedge_suggested": false
+}
+```
+
+Rules:
+- `severity = High` → set `block_new_longs: true` (no new entries until hedge confirmed); set `hedge_suggested: true`
+- `severity = Medium` → pass affected sectors to opportunity-finder as exclusions; do not block
+- `severity = Low/None` → pass geo_context with empty lists; no action
+
+Log the scan result:
+```bash
+echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conductor","event":"GEO_SCAN","severity":"SEVERITY","affected_sectors":[],"block_new_longs":false}' >> .trader/logs/agent.jsonl
+```
+
+Pass `geo_context` to **all** specialist agents in Step 6.
+
+---
+
+### 5b. Decide workflow
 
 **Bootstrap detection:** If positions = 0 AND open buy orders = 0 (a fresh or reset account), set `bootstrap = true`. Pass this flag to `opportunity-finder` and `portfolio-health` so they know to propose a full initial allocation rather than incremental adjustments. Skip `risk-monitor` (nothing to protect) and skip `strategy-optimizer` (no history to optimise yet). Note: orphaned GTC stop orders with no matching position or buy order do NOT count — `order-alert-manager` will cancel them in Step 6.
 
@@ -107,15 +159,20 @@ Based on time slot, portfolio state, and recent log:
 - **Always** run `risk-monitor` if there are open positions
 - **Always** run `portfolio-health` (surfaces drift even when no action needed)
 - **Always** run `order-alert-manager` — pass it any proposals from other specialists plus the current snapshot
-- **eu-pre-market** → run `opportunity-finder` scoped to EU exchanges (Euronext, XETRA, LSE); scan for EU-listed UCITS ETFs and European equities
-- **eu-market** → run `opportunity-finder` for EU stocks; also check US pre-market news/sentiment for US positions held
+- **Always (any slot with open positions)** → run `market-news-analyst` on all held tickers + watchlist tickers; pass output to `risk-monitor` so it can flag positions with fresh negative catalysts
+- **eu-pre-market** → run `economic-calendar-fetcher` first (gate: if 2+ High-impact EU events today, set `risk_mode=ELEVATED` and skip `opportunity-finder`); then run `opportunity-finder` scoped to EU exchanges
+- **eu-market** → run `opportunity-finder` for EU stocks; check US pre-market news/sentiment for US positions held via `market-news-analyst`
 - **eu-us-overlap** → run `opportunity-finder` for both universes; highest-priority window for entries and exits
-- **us-market** → run `opportunity-finder` scoped to US exchanges only
+- **us-market** → run `economic-calendar-fetcher` first (gate: if High-impact US events today, set `risk_mode=ELEVATED`); then run `opportunity-finder` scoped to US exchanges only
 - Any intraday slot → run `opportunity-finder` only if no opportunity signal was logged in the last 4 hours
 - **bi-weekly** (15th) → run `strategy-optimizer` + `order-alert-manager`; skip `opportunity-finder` unless pre-market
-- **weekly** (Sunday) → run `portfolio-health` deep review + performance review: scan agent.jsonl for ORDER_INTENTs, match to current positions/evolution log, compute win rate and log it
+- **weekly** (Sunday) → run `portfolio-health` deep review + `market-top-detector` (market regime assessment) + `sector-analyst` (sector rotation check) + performance review: scan agent.jsonl for ORDER_INTENTs, match to current positions/evolution log, compute win rate and log it
 - **monthly** (1st) → run `strategy-optimizer` + `system-improver` (30-day review window); `system-improver` audits decision quality, evaluates metric relevance, and proposes or applies system improvements
 - **"Do nothing" is always valid** — if situation is calm and no strong signals exist, log it and exit
+
+**`risk_mode` rules:**
+- `ELEVATED` → reduce new position sizes by 50%; do not open more than 1 new position; widen stops on existing positions
+- `NORMAL` → standard guardrails apply
 
 Log your workflow decision:
 ```bash
@@ -130,6 +187,17 @@ Use the Agent tool to invoke each specialist. Pass full context in the prompt:
 - Portfolio profile
 - Guardrails (from profile.portfolio_targets)
 - Current time slot
+- `geo_context` (from Step 5) — all specialists must respect affected sectors and block_new_longs flag
+
+**If `geo_context.block_new_longs = true`:** skip `opportunity-finder` entirely; instruct `risk-monitor` to flag any existing positions in `geo_context.affected_sectors` for protective stops.
+
+**Dispatch order (respect dependencies):**
+1. `economic-calendar-fetcher` → sets `risk_mode`
+2. `market-news-analyst` (positions + watchlist) → produces `news_context` (per-ticker sentiment + catalysts)
+3. `risk-monitor` (receives `news_context` + `geo_context` + snapshot)
+4. `portfolio-health` (receives snapshot + profile)
+5. `opportunity-finder` (receives `news_context` + `geo_context` + `risk_mode` + snapshot)
+6. `order-alert-manager` (receives all proposals + snapshot)
 
 Collect each specialist's JSON proposals.
 

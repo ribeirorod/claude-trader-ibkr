@@ -1,150 +1,163 @@
 # Architecture
 
-**Analysis Date:** 2026-03-10
+**Analysis Date:** 2026-03-11
 
 ## Pattern Overview
-- **Overall:** Two-subsystem monorepo — a thin async trading execution SDK (`vibe/`) and a strategy research/analysis engine (`volatility/composer/`), connected by the root-level portfolio scripts and the `IBKRDataFetcher` bridge.
+
+- **Overall:** Agent-first autonomous trading system. A Python CLI package (`trader/`) provides all trading primitives; an autonomous multi-agent layer (`.claude/agents/`) orchestrates them on a cron schedule. All CLI output is JSON. All agent coordination is done through structured JSONL logs written to `.trader/logs/`.
 - **Key characteristics:**
-  - Adapter pattern isolating the IBKR venue behind a uniform `Trader` facade
-  - Abstract base class pattern for strategies (`BaseStrategy`) enabling polymorphic execution and optimization
-  - All order I/O is async (`asyncio` / `ib_insync`); strategy compute is CPU-bound and runs in `ProcessPoolExecutor`
-  - No web server or API layer; entry points are standalone Python scripts and a `Scheduler` loop
+  - Adapter pattern: `Adapter` ABC in `trader/adapters/base.py` isolates broker communication; `IBKRRestAdapter` (default) and `IBKRTWSAdapter` (optional) are the two concrete implementations
+  - Factory function (`get_adapter`) selects adapter at CLI startup based on `--broker` flag or `DEFAULT_BROKER` env var
+  - Strategy pattern: `BaseStrategy` ABC in `trader/strategies/base.py`; `signals()` is the single entry point returning a `pd.Series` of `{-1, 0, 1}` per bar
+  - All CLI commands call `output_json()` — stdout is always clean JSON; diagnostic text goes to stderr
+  - Agent system is code-free: agents are markdown instruction files (`.claude/agents/*.md`), dispatched by the Claude AI runtime. No Python agent framework.
+  - Specialist agents propose; `portfolio-conductor` is the only agent that executes orders
 
 ---
 
 ## Layers
 
-**Venue Adapter:**
-- Purpose: Normalizes all IBKR TWS/Gateway communication into a single interface
-- Location: `vibe/venues/ibkr.py`
-- Contains: `IBKRAdapter` — connection management, contract qualification with in-memory cache, order building (market/limit/stop/trailing/bracket), status mapping, history, news
-- Depends on: `ib_insync`, `vibe/utils.py`
-- Used by: `vibe/trader.py`
+**CLI Layer:**
+- Purpose: User-facing and agent-facing interface; translates flags to async adapter calls and emits JSON
+- Location: `trader/cli/`
+- Contains: Click command groups — `account`, `quotes`, `orders`, `positions`, `news`, `strategies`, `alerts`, `scan`, `watchlist`
+- Depends on: `trader/adapters/factory.py`, `trader/strategies/`, `trader/news/`, `trader/models/`
+- Used by: Humans via `uv run trader …`; autonomous agents via `uv run trader …` in Bash tool calls
 
-**Trader Facade:**
-- Purpose: Public API that calling code and scripts import; hides the venue
-- Location: `vibe/trader.py`
-- Contains: `Trader` class — delegates every method to `self._venue` (`IBKRAdapter`)
-- Depends on: `vibe/venues/ibkr.py`, `vibe/models.py`
-- Used by: `portfolio_update_data.py`, `portfolio_run_strategy.py`, `portfolio_optimise_strategies.py`, `volatility/composer/core/ibkr_data_fetcher.py`, `examples/`
-
-**Domain Models:**
-- Purpose: Shared data contracts for order state and venue metadata
-- Location: `vibe/models.py`
-- Contains: `OrderResponse` (dataclass), `OrderStatus`, `OrderType`, `Side`, `TimeInForce`, `Venue` enums
-- Depends on: stdlib only
-- Used by: `vibe/venues/ibkr.py`, `vibe/trader.py`
-
-**Scheduler:**
-- Purpose: Lightweight async cron/interval task runner for strategy loops
-- Location: `vibe/scheduler.py`
-- Contains: `Scheduler` class with `.every()`, `.at()`, `.cron()` decorators and `async run()`
-- Depends on: stdlib `asyncio`, `datetime`
-- Used by: `examples/scheduled.py`
-
-**Utilities:**
-- Purpose: Shared async helpers and IBKR-specific utilities
-- Location: `vibe/utils.py`
-- Contains: `with_timeout`, `retry_async`, `TTLIdempotencyMap`, `normalize_symbol_ibkr`, `env_int`
-- Depends on: stdlib only
-- Used by: `vibe/venues/ibkr.py`
-
-**IBKR Bridge (Data Layer):**
-- Purpose: Adapts the `Trader` history API to the DataFrame format expected by the strategy engine
-- Location: `volatility/composer/core/ibkr_data_fetcher.py`
-- Contains: `IBKRDataFetcher` — wraps `Trader.history()`, in-memory cache, `fetch_multiple_async` for parallel fetches, format conversion from IBKR OHLCV to Volatility's `Date`-indexed format
-- Depends on: `vibe.Trader`, `pandas`
-- Used by: `portfolio_update_data.py`, `portfolio_run_strategy.py`, `portfolio_optimise_strategies.py`, `volatility/composer/tools/screener.py`
-
-**Market Data Fetchers:**
-- Purpose: Retrieve historical price data and ticker universe from external sources
-- Location: `volatility/composer/core/data_fetchers.py`
-- Contains: `MarketDataFetcher` (ABC), `YFinanceDataFetcher`, `PyTickerSymbolsFetcher`, `FMPDataFetcher`
-- Depends on: `yfinance`, `pytickersymbols`, `requests` (for FMP REST calls), `dotenv`
-- Used by: `volatility/composer/tools/screener.py`, `volatility/composer/main.py`
-
-**Strategy Engine:**
-- Purpose: Technical strategy logic with backtesting and Sharpe ratio scoring
-- Location: `volatility/composer/strategies/`
-- Contains: `BaseStrategy` (ABC with `execute`, `backtest`, `plot`, `train_test_split`), concrete strategies: `RSIStrategy` (`rsi.py`), `MACDStrategy` (`macd.py`), `MACrossStrategy` (`macross.py`), `BNFStrategy` (`bnf.py`), `BBStrategy` (`bb.py`), `StochasticStrategy` (`stochastic.py`), `MACRSIStrategy` (`macrsi.py`)
-- Depends on: `volatility/composer/core/data_processors.py` (`IndicatorCalculator`)
-- Used by: `StrategyFactory`, `StrategyOptimizer`, `StrategyExecutor`
-
-**Strategy Tools:**
-- Purpose: Orchestration — factory creation, parallel execution, parameter optimization, asset screening
-- Location: `volatility/composer/tools/`
+**Adapter Layer:**
+- Purpose: Abstracts all broker I/O behind a uniform async interface
+- Location: `trader/adapters/`
 - Contains:
-  - `StrategyFactory` — maps strategy name strings to classes, falls back to MACD on unknown
-  - `StrategyExecutor` — runs strategies in `ProcessPoolExecutor`, generates text reports
-  - `StrategyOptimizer` — exhaustive grid search over parameter ranges using `ProcessPoolExecutor`, Sharpe-ranked
-  - `AssetsScreener` — multi-source screener (yfinance / FMP / IBKR), technical + fundamental criteria, composite score
-  - `manager.py` — not analyzed in detail
-  - `mailing.py` — email delivery of reports
-  - `vibe_adapter.py` — additional adapter bridge
+  - `base.py` — `Adapter` ABC with 15 abstract async methods (connect, disconnect, get_account, get_quotes, get_option_chain, place_order, modify_order, cancel_order, list_orders, list_positions, close_position, get_news, list_alerts, create_alert, delete_alert, scan, scan_params)
+  - `factory.py` — `get_adapter(broker, config)` factory function
+  - `ibkr_rest/adapter.py` — `IBKRRestAdapter`: full implementation via IBKR Client Portal Gateway REST API (port 5000/5001); handles IBKR reply-confirmation loop for orders, conid resolution, bracket order construction
+  - `ibkr_rest/client.py` — `IBKRRestClient`: thin httpx wrapper with SSL verification disabled (self-signed gateway cert)
+  - `ibkr_tws/adapter.py` — `IBKRTWSAdapter`: stub wrapping `ib_insync.IB`; requires optional install `trader[tws]`
+- Depends on: `trader/config.py`, `trader/models/`, `httpx` (rest), `ib_insync` (tws, optional)
+- Used by: `trader/cli/` commands
 
-**Data Processors:**
-- Purpose: Technical indicator calculations used by strategies and screener
-- Location: `volatility/composer/core/data_processors.py`
-- Contains: `IndicatorCalculator` (MA, RSI, MACD, Bollinger Bands, ATR, Stochastic, volume ratio, etc.), `SummaryGenerator`
-- Depends on: `pandas`, `numpy` (implied)
-- Used by: strategies, `AssetsScreener`, `IBKRDataFetcher`
+**Domain Models Layer:**
+- Purpose: Typed DTOs shared across CLI, adapters, and strategies
+- Location: `trader/models/`
+- Contains: `Account`, `Balance`, `Margin` (`account.py`); `Order`, `OrderRequest` (`order.py`); `Position`, `PnL` (`position.py`); `Quote`, `OptionChain`, `OptionContract` (`quote.py`); `NewsItem`, `SentimentResult` (`news.py`); `Alert`, `AlertCondition` (`alert.py`); `ScanResult` (`scan.py`)
+- Depends on: Pydantic (all models use `.model_dump()`)
+- Used by: adapters, CLI commands, `trader/strategies/`
 
-**Data Persistence:**
-- Purpose: CSV/JSON import-export helpers
-- Location: `volatility/composer/core/data_persistence.py`
-- Contains: `DataPersistence` — `export_csv`, `export_json`, `load_json`
-- Used by: `volatility/composer/main.py`, optimization scripts
+**Strategy Layer:**
+- Purpose: Pure-function technical analysis strategies returning buy/sell/hold signals
+- Location: `trader/strategies/`
+- Contains:
+  - `base.py` — `BaseStrategy` ABC: `signals(ohlcv: pd.DataFrame) -> pd.Series`, `default_params() -> dict`
+  - `rsi.py` — `RSIStrategy`: RSI crossover (`period`, `oversold`, `overbought`)
+  - `macd.py` — `MACDStrategy`: MACD signal line crossover (`fast`, `slow`, `signal`)
+  - `ma_cross.py` — `MACrossStrategy`: fast/slow SMA crossover (`fast_window`, `slow_window`)
+  - `bnf.py` — `BNFStrategy`: Bollinger Band + price action breakout (`lookback`, `breakout_pct`)
+  - `factory.py` — `get_strategy(name, params)` and `list_strategies()`; registry dict maps name → class
+  - `optimizer.py` — `Optimizer.grid_search()`: exhaustive grid search over param space, returns best params by Sharpe/returns/win_rate
+  - `risk_filter.py` — `RiskFilter.filter()`: post-signal filter layer (sentiment gating, etc.)
+- Depends on: `pandas`, `numpy`, `yfinance` (OHLCV fetch in CLI commands)
+- Used by: `trader/cli/strategies.py`
 
-**Plotter:**
-- Purpose: Visualization of strategy results
-- Location: `volatility/composer/core/plotter.py`
-- Contains: `Plotter` class — HTML/PNG/CSV output formats
-- Used by: `StrategyFactory`, portfolio scripts
+**News Layer:**
+- Purpose: Fetch financial news and score sentiment
+- Location: `trader/news/`
+- Contains:
+  - `benzinga.py` — `BenzingaClient`: async httpx client for Benzinga REST v2 API; uses `token` query param + `Accept: application/json` header
+  - `sentiment.py` — `SentimentScorer`: scores a list of `NewsItem` objects into a `SentimentResult`
+- Depends on: `httpx`, `trader/config.py`
+- Used by: `trader/cli/strategies.py` (`--with-news` flag), `trader/cli/watchlist.py` (`--signals` flag), `trader/cli/news.py`
+
+**Configuration Layer:**
+- Purpose: Single source of truth for all environment-driven settings
+- Location: `trader/config.py`
+- Contains: `Config` dataclass — loads all env vars via `dotenv`; properties: `ib_host`, `ib_port`, `ib_account`, `ibkr_username`, `ibkr_password`, `benzinga_api_key`, `max_position_pct`, `default_strategy`, `default_broker`, `agent_mode`, `agent_log_path`, `agent_profile_path`; computed property `ibkr_rest_base_url`
+- Depends on: `python-dotenv`
+- Used by: `trader/cli/__main__.py` (singleton `config = Config()` at module load)
+
+**Agent Infrastructure Layer:**
+- Purpose: Python support types for the autonomous agent system
+- Location: `trader/agents/`
+- Contains:
+  - `context.py` — `build_context()`: assembles run context dict from snapshot + profile + recent log; `TimeSlot` enum; `load_profile()` reader for `.trader/profile.json`
+  - `log.py` — `AgentLog`: append-only JSONL writer to `.trader/logs/agent.jsonl`; `LogEvent` dataclass; `read_last(n)` tail reader; `new_run_id()` 8-char hex generator
+- Depends on: stdlib only
+- Used by: autonomous agents (indirectly via CLI) and potentially by conductor scripts
+
+**Autonomous Agent Layer:**
+- Purpose: AI-driven portfolio management; runs on cron schedule, dispatches specialist agents, executes trades
+- Location: `.claude/agents/`
+- Contains (all markdown instruction files):
+  - `portfolio-conductor.md` — orchestrator; only agent that places orders; dispatches all specialists
+  - `risk-monitor.md` — position drawdown, stop-loss gaps, sector concentration assessment
+  - `portfolio-health.md` — allocation drift, HHI concentration, cash floor checks
+  - `opportunity-finder.md` — universe cache management (`universe.json`), scan-based discovery, candidate validation, proposal generation
+  - `order-alert-manager.md` — alert/order lifecycle management; deduplication; triggered-alert-to-bracket conversion
+  - `strategy-optimizer.md` — bi-weekly backtest runner; recommends parameter updates; emits `ALERT_PROPOSAL`
+  - `system-improver.md` — monthly self-improvement; audits decision quality; applies profile/agent-file changes in autonomous mode
+  - `portfolio-manager.md` — general portfolio management skill
+- Depends on: Claude AI runtime (Agent tool dispatch), `uv run trader …` CLI commands via Bash tool
+- Used by: `.claude/crons.json` schedule → triggers `portfolio-conductor` which dispatches the rest
+
+**Skill Library:**
+- Purpose: Reusable analysis capabilities that agents invoke via the Agent tool
+- Location: `.claude/skills/`
+- Contains (each a `SKILL.md` instruction file): `backtest-expert`, `earnings-trade-analyzer`, `economic-calendar-fetcher`, `etf-rotation`, `geopolitical-influence`, `market-news-analyst`, `market-top-detector`, `morning-routine`, `options-strategy-advisor`, `portfolio-manager`, `position-sizer`, `sector-analyst`, `stanley-druckenmiller-investment`, `stock-screener`, `technical-analyst`, `trader-cli`, `trader-strategies`, `vcp-screener`
+- Used by: `portfolio-conductor.md` (dispatches skills by name from its "Skills Available" list)
 
 ---
 
 ## Data Flow
 
-**Portfolio Update (daily workflow):**
-1. `portfolio_update_data.py` → `Trader.portfolio_dataframe()` → `IBKRAdapter.portfolio_dataframe()` → IBKR TWS
-2. Positions written to `outputs/portfolio.csv`
-3. `IBKRDataFetcher.fetch_multiple_async()` → `Trader.history()` per ticker → IBKR historical data
-4. OHLCV rows appended to `outputs/history.csv`
-5. `IndicatorCalculator.calculate_all_indicators()` → results appended to `outputs/indicators.csv`
+**Scheduled Cron Run (typical intraday slot):**
+1. `crons.json` triggers `portfolio-conductor` Claude agent with a slot-specific prompt
+2. Conductor runs `uv run trader positions list`, `uv run trader positions pnl`, `uv run trader account summary`, `uv run trader orders list --status open` → IBKR live snapshot
+3. Appends compact JSON snapshot to `.trader/logs/portfolio_evolution.jsonl`
+4. Reads `.trader/logs/agent.jsonl` (last 50 lines) for recent decision history
+5. Reads `.trader/profile.json` for portfolio profile and guardrails
+6. Dispatches specialist agents via Claude Agent tool (each specialist runs CLI commands internally):
+   - `economic-calendar-fetcher` → sets `risk_mode`
+   - `market-news-analyst` on held tickers + watchlist → produces `news_context`
+   - `risk-monitor` → receives `news_context` + snapshot → emits `RISK_FLAG` proposals
+   - `portfolio-health` → emits `DRIFT` flags + `TRIM` proposals
+   - `opportunity-finder` → checks `.trader/universe.json` cache staleness → runs IBKR scans → validates candidates → emits `OPPORTUNITY` + `ALERT_PROPOSAL` proposals
+   - `order-alert-manager` → reads `uv run trader alerts list` + `uv run trader orders list` → deduplicates proposals → emits action list
+7. Conductor reviews proposals against guardrails (cash floor, position sizing, daily limit)
+8. In `autonomous` mode: logs `ORDER_INTENT` to `agent.jsonl`, executes `uv run trader orders buy/sell/stop …`
+9. Logs `RUN_END` event to `agent.jsonl`
 
-**Strategy Signal Generation (run_strategy workflow):**
-1. `portfolio_run_strategy.py` reads `outputs/portfolio.csv` → extract ticker list
-2. Loads `volatility/composer/resources/best_params.json` → checks parameter freshness (max 30 days)
-3. Loads `outputs/history.csv` (CSV-first); missing tickers fetched from IBKR via `IBKRDataFetcher`
-4. `StrategyFactory.create_strategy()` → instantiates concrete `BaseStrategy` subclass per ticker
-5. `StrategyExecutor.run_parallel()` → `ProcessPoolExecutor` → each strategy calls `.backtest()` → `execute()` → signal series
-6. Latest signal extracted (`+1=BUY`, `-1=SELL`, `0=HOLD`) → saved to `outputs/signals/portfolio_signals_*.json`
+**CLI Signal Generation (agent-invoked):**
+1. `uv run trader strategies signals --tickers TICKER --strategy rsi`
+2. `trader/cli/strategies.py` → `get_strategy("rsi")` → `RSIStrategy`
+3. `yf.download(ticker, period=lookback)` → OHLCV DataFrame
+4. `strat.signals(df)` → `pd.Series` of `{-1, 0, 1}`
+5. Optional: `BenzingaClient.get_news()` → `SentimentScorer.score()` → `SentimentResult`
+6. `RiskFilter.filter(signal, sentiment)` → filtered signal
+7. `output_json([{ticker, signal, signal_label, filtered, filter_reason, sentiment_score}])` → stdout
 
-**Strategy Optimization (monthly workflow):**
-1. `portfolio_optimise_strategies.py` loads `outputs/history.csv` (or fetches fresh from IBKR)
-2. For each ticker × strategy: `StrategyOptimizer.optimize()` → `generate_parameter_combinations()` → shuffled grid
-3. `ProcessPoolExecutor` runs `evaluate_parameters()` on each combo → `BaseStrategy.backtest()` → Sharpe ratio
-4. Top 10 params ranked, early-exit if Sharpe > 1.8
-5. Best params written to `volatility/composer/resources/best_params.json` (merged, keyed by ticker+strategy)
+**CLI Order Execution:**
+1. `uv run trader orders buy TICKER QTY --type limit --price PRICE`
+2. `trader/cli/orders.py` → `get_adapter(broker, config)` → `IBKRRestAdapter`
+3. `adapter.connect()` → POST `/tickle` + GET `/iserver/auth/status` (up to 8 retries, 3s delay)
+4. `adapter.place_order(OrderRequest)` → `_resolve_conid(ticker)` → POST `/iserver/account/{id}/orders`
+5. `_confirm_replies()` loop — handles IBKR warning confirmation messages
+6. For bracket orders: POST child stop/take-profit orders linked by `parentId`
+7. Returns `Order` dataclass → `output_json()` → stdout
 
-**Asset Discovery (screening workflow):**
-1. `AssetsScreener.screen_assets()` fetches price data via configured source (yfinance / FMP / IBKR)
-2. `_calculate_technical_indicators()` → SMA, RSI, MACD, volume ratio, distance from SMA
-3. Optionally fetches fundamentals (fault-tolerant) → composite score weighting
-4. `_process_screening_criteria()` applies thresholds → returns `List[Stock]`
-
-**Order Execution (live/paper trading):**
-1. Caller (example script or strategy) calls `Trader.buy/sell/bracket()`
-2. `IBKRAdapter.connect()` (lazy, retried 3×) → `_qualify_stock()` (cached contract lookup)
-3. `_build_order()` → constructs `ib_insync` order object
-4. `placeOrderAsync()` (with async/sync fallback) → IBKR TWS
-5. `OrderResponse` dataclass returned with normalized status
+**Universe Discovery (opportunity-finder):**
+1. Agent reads `.trader/universe.json` — checks `last_refreshed_eu` / `last_refreshed_us` staleness (20h threshold)
+2. If stale: runs `uv run trader scan run HIGH_VS_52W_HL --market STK.EU.LSE …` etc. across multiple scan types and markets
+3. Merges and scores results (3+ scans=100, 2 scans=70, 1 scan=40, watchlist bonus=+15)
+4. Writes updated segments back to `.trader/universe.json`
+5. Top candidates validated via `uv run trader strategies signals` + `uv run trader news sentiment`
 
 **State Management:**
-- No central state store; each script is stateless on startup
-- `IBKRAdapter` holds: `_qualified_cache` (in-memory contract cache), `_idemp` (`TTLIdempotencyMap` for order deduplication, TTL=1h)
-- `IBKRDataFetcher` holds an in-memory `_cache` dict per instance
-- Persistent state lives in `outputs/` CSV/JSON files
+- No in-process state store between runs; every run starts from live broker + JSONL history
+- `IBKRRestAdapter` holds no persistent state (conid resolution is re-fetched each call — no cache currently)
+- Agent state is encoded in `.trader/logs/agent.jsonl` (append-only JSONL)
+- Portfolio evolution is tracked in `.trader/logs/portfolio_evolution.jsonl` (one snapshot object per line)
+- Universe cache lives in `.trader/universe.json` (overwritten on refresh)
+- Watchlists live in `outputs/watchlists.json` (named JSON object, keys=list names)
+- Improvement proposals (supervised mode) written to `.trader/logs/improvement_proposals.jsonl`
 
 ---
 
@@ -152,17 +165,20 @@
 
 | Abstraction | Purpose | Location | Pattern |
 |-------------|---------|----------|---------|
-| `Trader` | Venue-agnostic trading API | `vibe/trader.py` | Facade / Adapter |
-| `IBKRAdapter` | IBKR-specific implementation | `vibe/venues/ibkr.py` | Adapter |
-| `OrderResponse` | Normalized order state | `vibe/models.py` | Dataclass DTO |
-| `Scheduler` | Async task scheduling | `vibe/scheduler.py` | Decorator-based scheduler |
-| `TTLIdempotencyMap` | Order dedup with TTL eviction | `vibe/utils.py` | LRU + TTL cache |
-| `BaseStrategy` | Strategy contract | `volatility/composer/strategies/base.py` | Abstract Base Class |
-| `MarketDataFetcher` | Data source contract | `volatility/composer/core/data_fetchers.py` | Abstract Base Class |
-| `StrategyFactory` | Strategy instantiation | `volatility/composer/tools/strategy_factory.py` | Factory |
-| `StrategyOptimizer` | Grid search optimization | `volatility/composer/tools/optimiser.py` | Grid search + process pool |
-| `IBKRDataFetcher` | Bridge between vibe and volatility | `volatility/composer/core/ibkr_data_fetcher.py` | Adapter bridge |
-| `AssetsScreener` | Multi-source screening | `volatility/composer/tools/screener.py` | Strategy + composite score |
+| `Adapter` | Broker-agnostic async trading interface | `trader/adapters/base.py` | Abstract Base Class |
+| `IBKRRestAdapter` | IBKR Client Portal Gateway implementation | `trader/adapters/ibkr_rest/adapter.py` | Concrete Adapter |
+| `IBKRTWSAdapter` | ib_insync TWS implementation (optional) | `trader/adapters/ibkr_tws/adapter.py` | Concrete Adapter |
+| `get_adapter` | Broker selection factory | `trader/adapters/factory.py` | Factory function |
+| `Config` | Env-driven configuration dataclass | `trader/config.py` | Dataclass + dotenv |
+| `BaseStrategy` | Strategy signal contract | `trader/strategies/base.py` | Abstract Base Class |
+| `get_strategy` | Strategy name→class registry | `trader/strategies/factory.py` | Registry + factory |
+| `Optimizer` | Grid-search parameter tuner | `trader/strategies/optimizer.py` | Grid search |
+| `RiskFilter` | Post-signal gating layer | `trader/strategies/risk_filter.py` | Filter |
+| `BenzingaClient` | News fetch from Benzinga REST v2 | `trader/news/benzinga.py` | Async HTTP client |
+| `AgentLog` | Append-only JSONL event log | `trader/agents/log.py` | Event log |
+| `build_context` | Assembles agent run context | `trader/agents/context.py` | Context builder |
+| `output_json` | CLI JSON serialization + optional file save | `trader/cli/__main__.py` | Output helper |
+| `portfolio-conductor` | Autonomous orchestrator; sole order executor | `.claude/agents/portfolio-conductor.md` | Orchestrator agent |
 
 ---
 
@@ -170,29 +186,28 @@
 
 | Entry Point | Location | Triggers |
 |-------------|----------|----------|
-| Portfolio data refresh | `portfolio_update_data.py` | Manual / scheduled cron |
-| Strategy signal generation | `portfolio_run_strategy.py` | Manual / scheduled cron |
-| Strategy optimization | `portfolio_optimise_strategies.py` | Manual / monthly cron |
-| Asset discovery | `portfolio_discover_by_sector.py` | Manual |
-| Volatility CLI | `volatility/composer/main.py` | `python main.py --mode [manage|optimise|screen]` |
-| Examples | `examples/one_off.py`, `examples/scheduled.py`, `examples/bracket.py` | Manual / demo |
+| CLI (all commands) | `trader/cli/__main__.py` — `cli` Click group | `uv run trader …` |
+| Cron scheduler | `.claude/crons.json` (6 schedules) | launchd/cron via `scripts/setup-crons.sh` |
+| Portfolio conductor | `.claude/agents/portfolio-conductor.md` | Each cron slot: eu-pre-market (8:03 CET), eu-market (9:07–15:07 CET hourly), eu-us-overlap (15:03 CET), us-market (17:07–21:07 CET hourly), weekly (Sun 18:03 CET), monthly (1st Sun 18:03 CET) |
 
 ---
 
 ## Error Handling
 
-- **Strategy:** `BaseStrategy.backtest()` and `execute()` failures are caught in `StrategyExecutor`; errors returned in result dict under `'error'` key
-- **Optimization:** Per-parameter-combo exceptions are logged and skipped; optimization continues
-- **IBKR connection:** `retry_async` with 3 retries and exponential backoff for `TimeoutError`; `with_timeout` wraps all IBKR async calls
-- **Order submission:** Idempotency via `TTLIdempotencyMap` prevents duplicate orders on retry
-- **Data fetching:** `IBKRDataFetcher.fetch_multiple_async` uses `asyncio.gather(return_exceptions=True)`; screener has explicit retry with rate-limit delays
-- **Scheduler:** Task exceptions are swallowed to prevent scheduler crash (logged comment, no actual logger call — see CONCERNS)
+- **CLI commands:** All broker-facing commands wrap the async call in try/except; on error, `{"error": str(e), "code": type(e).__name__}` is emitted to stdout and the process exits with code 1
+- **Adapter connect:** `IBKRRestAdapter.connect()` retries up to 8 times with 3s delay; raises `RuntimeError` if still unauthenticated
+- **IBKR order confirmation:** `_confirm_replies()` handles warning-message reply loop (up to 5 iterations); raises `ValueError` on `"error"` in response
+- **Strategy signals:** Per-ticker exceptions in `signals` command are caught; `{"ticker": …, "error": str(e)}` is included in the result array (partial success)
+- **Agent errors:** If `trader alerts list` or `trader orders list` fails, `order-alert-manager` returns `{"error": "could not fetch live state", "proposals_deferred": true}` — conductor retries next cycle
+- **News fetch:** Benzinga client propagates `httpx` exceptions; callers (CLI) catch and degrade gracefully
 
 ---
 
 ## Cross-Cutting Concerns
 
-- **Logging:** `logging.getLogger(__name__)` used throughout; root logger configured via `basicConfig(level=INFO)` in portfolio scripts; no structured logging
-- **Validation:** Minimal; order parameter validation in `_build_order()` (raises `ValueError` for missing prices); no input validation on strategy parameters
-- **Authentication:** IBKR connection credentials via environment variables (`IB_HOST`, `IB_PORT`, `IB_CLIENT_ID`, `IB_ACCOUNT`); loaded from `.env` via `dotenv` in fetcher module
-- **Concurrency:** Order/history I/O is async (`asyncio`); CPU-bound strategy/optimization workloads use `ProcessPoolExecutor`
+- **Logging:** Agent events logged as newline-delimited JSON to `.trader/logs/agent.jsonl`; standard Python `logging` not used in agent layer — all agent observability goes through the JSONL log; CLI uses `click.echo(err=True)` for diagnostic messages
+- **Validation:** `OrderRequest` uses Pydantic; `Config` uses dataclass with env-var defaults; strategy params are merged dicts (no schema validation)
+- **Authentication:** IBKR REST — session is managed by the Client Portal Gateway; CLI calls `POST /tickle` to keep session alive on connect; TWS — `ib_insync` handles auth; Benzinga — `token` query parameter (not Authorization header)
+- **Concurrency:** CLI adapter calls use `asyncio.run()` per command invocation (no shared event loop); strategy compute is synchronous CPU-bound (pandas); multiple quotes resolved via `asyncio.gather()` inside the adapter
+- **Agent mode:** `AGENT_MODE=autonomous` (default) — conductor executes orders; `AGENT_MODE=supervised` — logs `ORDER_INTENT` but does not execute; checked from env var at each run
+- **EU account constraint:** MiFID II KID restriction prevents trading US-listed ETFs (SPY, QQQ, IWM, etc.) from this account; agents use UCITS equivalents (CSPX, IWDA, EQQQ, etc.) and `opportunity-finder` enforces this in proposal logic

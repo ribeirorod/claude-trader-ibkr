@@ -1,64 +1,103 @@
 # Technology Stack
 
-**Analysis Date:** 2026-03-10
+**Analysis Date:** 2026-03-11
 
 ## Languages
-- **Primary:** Python 3.10 — All application code (trading engine, strategy analysis, data fetching)
+- **Primary:** Python >=3.10 — All application code in `trader/` package (CLI, broker adapters, strategies, models, agents)
 
 ## Runtime & Package Manager
-- Python 3.10.17 (managed via `.venv` at `.venv/`, using Homebrew `python@3.10`)
-- pip — Lockfile: not present (flat `requirements.txt`, no `poetry.lock` or `pip-tools` pins for most packages)
+- Python >=3.10 (tested on 3.12 via Homebrew `python3.12`, `.venv/` managed by uv)
+- **Package Manager:** `uv` — Lockfile: `uv.lock` (present, pinned hashes). Install with `uv sync`, add deps with `uv add`.
+- Virtual environment: `.venv/` at project root
 
 ## Frameworks
 | Framework | Version | Purpose |
 |-----------|---------|---------|
-| asyncio (stdlib) | 3.10 built-in | Core async I/O for all IBKR communication and scheduling |
-| pydantic | 2.9.1 | Data validation and model definitions in `volatility/composer/core/models.py` |
+| click | >=8.1 | CLI framework — all commands, groups, options, `--help` generation |
+| pydantic | >=2.9 | Data models and validation — all `trader/models/` dataclasses serialized via `model_dump()` |
+| asyncio (stdlib) | built-in | Core async I/O — all broker adapter methods are `async def`; CLI runs via `asyncio.run()` |
+| pytest | >=8 | Test runner — config in `pyproject.toml` `[tool.pytest.ini_options]` |
+| pytest-asyncio | >=0.23 | Async test support — `asyncio_mode = "auto"` in pytest config |
 
 ## Key Dependencies
 | Package | Version | Why Critical |
 |---------|---------|--------------|
-| ib_insync | 0.9.86 | IBKR TWS/Gateway async Python client — entire broker integration depends on this |
-| pandas | 2.2.2 | OHLCV DataFrames throughout; returned by all history/portfolio methods |
-| yfinance | 0.2.43 | Market data fetching in `volatility/composer/core/data_fetchers.py` (YFinanceDataFetcher) |
-| pydantic | 2.9.1 | Models and validation in `volatility/composer/core/models.py` |
-| python-dotenv | >=1.0,<2 | Loads `.env` for IB_HOST, IB_PORT, IB_CLIENT_ID, IB_ACCOUNT, FM_API_KEY |
-| structlog | >=23,<25 | Structured logging (declared; `vibe/` uses stdlib logging, volatility uses stdlib logging too) |
-| requests | >=2.31,<3 | HTTP client for FMP REST API in `volatility/composer/core/data_fetchers.py` |
-| aiohttp | >=3.9,<4 | Async HTTP (declared dependency, available for async REST calls) |
-| pytickersymbols | 1.13.0 | Index/country/industry ticker lookups in `PyTickerSymbolsFetcher` |
-| matplotlib | 3.9.2 | Charting/plotting in `volatility/composer/core/plotter.py` |
-| plotly | 5.24.1 | Interactive charts in volatility module |
-| tqdm | 4.66.5 | Progress bars during batch data fetching |
-| google-auth | 2.35.0 | OAuth2 for Gmail API in `volatility/composer/tools/mailing.py` |
-| google-api-python-client | 2.149.0 | Gmail send API in `volatility/composer/tools/mailing.py` |
-| PyYAML | (implied) | YAML config loading in `volatility/composer/core/config.py` (not pinned in requirements.txt) |
+| httpx | >=0.27 | Async HTTP client used by `IBKRRestClient` and `BenzingaClient`; replaces requests for async support |
+| ibeam | >=0.5.10 | IBKR Client Portal Gateway session keepalive — prevents auth timeout without manual browser interaction |
+| pandas | >=2.2 | OHLCV DataFrames consumed by all strategy `signals()` methods in `trader/strategies/` |
+| yfinance | >=0.2 | Historical price data fetching for strategy backtesting and signal generation |
+| python-dotenv | >=1.0,<2 | Loads `.env` at startup in `trader/config.py` via `load_dotenv()` |
+| ib_insync | >=0.9.86 (optional) | TWS adapter — only installed with `uv sync --extra tws`; used by `IBKRTWSAdapter` |
+| respx | >=0.21 (dev) | httpx mock library for unit tests — mocks IBKR REST and Benzinga HTTP calls |
+| pytest-mock | >=3.12 (dev) | Mocker fixture for unit tests |
+
+## CLI Entry Point
+- **Command:** `trader` (installed via `[project.scripts]` in `pyproject.toml`)
+- **Entry:** `trader.cli.__main__:cli`
+- **Root group:** `trader/cli/__main__.py` — registers 9 subcommand groups: `account`, `quotes`, `orders`, `positions`, `news`, `strategies`, `alerts`, `scan`, `watchlist`
+- **Design contract:** All commands output JSON to stdout by default; `--save` writes to `outputs/{group}/{YYYY-MM-DD}/{HH-MM-SS}_{sub}.json`
+
+## Strategy Modules
+Pure-function strategies in `trader/strategies/` — each subclasses `BaseStrategy` (in `trader/strategies/base.py`) and implements `signals(ohlcv: pd.DataFrame) -> pd.Series`:
+| Strategy | File | Signal Logic |
+|----------|------|--------------|
+| RSI | `trader/strategies/rsi.py` | Oversold (<30) → buy (+1), overbought (>70) → sell (-1) |
+| MACD | `trader/strategies/macd.py` | MACD line / signal line crossover |
+| MACross | `trader/strategies/ma_cross.py` | Moving average crossover |
+| BNF | `trader/strategies/bnf.py` | BNF momentum strategy |
+
+Strategy factory at `trader/strategies/factory.py`. Risk filter wrapper at `trader/strategies/risk_filter.py`. Parameter optimizer at `trader/strategies/optimizer.py`.
+
+## Broker Adapter System
+Abstract base at `trader/adapters/base.py` (`Adapter` ABC). Factory function at `trader/adapters/factory.py` (`get_adapter(broker, config)`). Two implementations:
+- `ibkr-rest` → `trader/adapters/ibkr_rest/adapter.py` (`IBKRRestAdapter`) — primary, default
+- `ibkr-tws` → `trader/adapters/ibkr_tws/adapter.py` (`IBKRTWSAdapter`) — optional, requires `[tws]` extra
+
+## Agent & Skill System
+Claude Code agent/skill system in `.claude/` (not Python code — Markdown prompt files):
+- **Agents** (`.claude/agents/*.md`): `portfolio-manager`, `portfolio-conductor`, `portfolio-health`, `risk-monitor`, `strategy-optimizer`, `opportunity-finder`, `order-alert-manager`, `system-improver`
+- **Skills** (`.claude/skills/*/`): `trader-cli`, `morning-routine`, `market-news-analyst`, `technical-analyst`, `options-strategy-advisor`, `position-sizer`, `sector-analyst`, `backtest-expert`, `portfolio-manager`, and more (18 total)
+- **Scheduling:** `.claude/crons.json` defines recurring agent runs; `scripts/setup-crons.sh` registers them at session start via Claude Code's `CronCreate` tool
+- **Agent runtime support (Python):** `trader/agents/log.py` (`AgentLog` — JSONL event log at `.trader/logs/agent.jsonl`) and `trader/agents/context.py` (`build_context`, `TimeSlot` enum, `load_profile`)
+- **Execution modes:** `AGENT_MODE=supervised` (log intents only) vs `AGENT_MODE=autonomous` (execute orders)
+
+## Pydantic Models
+All in `trader/models/` — used for JSON serialization via `model_dump()`:
+| Model | File | Purpose |
+|-------|------|---------|
+| `Account`, `Balance`, `Margin` | `trader/models/account.py` | Account summary |
+| `Order`, `OrderRequest` | `trader/models/order.py` | Order placement and state |
+| `Position`, `PnL` | `trader/models/position.py` | Open positions |
+| `Quote`, `OptionChain`, `OptionContract` | `trader/models/quote.py` | Market data |
+| `NewsItem`, `SentimentResult` | `trader/models/news.py` | News and sentiment |
+| `Alert`, `AlertCondition` | `trader/models/alert.py` | Price alerts |
+| `ScanResult` | `trader/models/scan.py` | Market scanner results |
 
 ## Configuration
-- **Environment:** `.env` file loaded via `python-dotenv`. Key variables:
-  - `IB_HOST` (default: `127.0.0.1`) — TWS/Gateway host
-  - `IB_PORT` (default: `7497`) — TWS paper port; live is `7496`
-  - `IB_CLIENT_ID` (default: `101`) — IBKR connection client ID
-  - `IB_ACCOUNT` — IBKR account ID (optional, used for filtering)
-  - `ORDER_TIMEOUT` (default: `5000`) — ms timeout for order placement
-  - `HISTORY_TIMEOUT` (default: `10000`) — ms timeout for historical data requests
-  - `MAX_CONCURRENT_ORDERS` (default: `10`) — concurrency cap
-  - `FM_API_KEY` — Financial Modeling Prep API key
-  - `LOG_CFG` — Optional path to override `config/logging.yaml`
-- **Build:** No build system. Scripts run directly with `python <script>.py`. Virtual environment at `.venv/`.
-- **YAML config:** `volatility/composer/core/config.py` reads `config/settings.yaml` and `config/logging.yaml` (paths relative to CWD at invocation)
+- **Config class:** `trader/config.py` — `@dataclass Config` loaded at CLI startup; all fields read from env via `os.getenv()`
+- **Environment:** `.env` loaded via `python-dotenv`. See `.env.example` for all variables.
+- **Key env vars:**
+  - `IB_HOST` (default: `127.0.0.1`) — IBKR gateway host
+  - `IB_PORT` (default: `5000`, production: `5001`) — IBKR Client Portal HTTPS port
+  - `IB_ACCOUNT` — IBKR account ID (paper: `DU...`, live: `U...`)
+  - `BENZINGA_API_KEY` — Benzinga news REST API token
+  - `DEFAULT_BROKER` (default: `ibkr-rest`) — broker adapter selector
+  - `DEFAULT_STRATEGY` (default: `rsi`) — default strategy for signal commands
+  - `MAX_POSITION_PCT` (default: `0.05`) — max single-position sizing
+  - `AGENT_MODE` (`supervised` | `autonomous`) — agent order execution mode
+  - `AGENT_LOG_PATH` (default: `.trader/logs/agent.jsonl`) — agent JSONL event log
+  - `AGENT_PROFILE_PATH` (default: `.trader/profile.json`) — portfolio profile for agents
+  - `IBEAM_ACCOUNT`, `IBEAM_PASSWORD`, `IBEAM_GATEWAY_BASE_URL`, `IBEAM_AUTHENTICATE`, `IBEAM_KEY` — ibeam keepalive config
+  - `FM_API_KEY` — Financial Modeling Prep (optional, for fundamental screening)
+- **Build system:** setuptools (`pyproject.toml`), package discovery via `[tool.setuptools.packages.find]` targeting `trader*`
+
+## Output Structure
+- `outputs/` — Runtime outputs organized by command group and date
+  - `outputs/{group}/{YYYY-MM-DD}/{HH-MM-SS}_{sub}.json`
+- `.trader/logs/agent.jsonl` — JSONL agent event log (one JSON object per line)
+- `.trader/profile.json` — Portfolio profile consumed by agents
 
 ## Platform Requirements
-- **Development:** macOS (darwin), Python 3.10, IBKR TWS or IB Gateway running locally on port 7497 (paper) or 7496 (live)
-- **Production:** Single-machine execution; no containerisation or deployment manifests detected. IBKR Gateway must be co-located or network-accessible.
-
-## Project Modules
-| Module | Entry Points | Purpose |
-|--------|-------------|---------|
-| `vibe/` | `vibe.Trader`, `vibe.Scheduler` | Core async trading engine — order management, positions, history, news |
-| `volatility/composer/` | `volatility/composer/main.py`, `volatility/composer/cli.py` | Strategy backtesting, optimisation, screening |
-| `portfolio_run_strategy.py` | CLI script | Load portfolio, run strategies with optimised params, generate signals |
-| `portfolio_optimise_strategies.py` | CLI script | Optimise strategy parameters for held positions |
-| `portfolio_update_data.py` | CLI script | Refresh market data cache for portfolio tickers |
-| `test_ibkr_all_assets.py` | CLI script | IBKR asset discovery / connectivity test |
-| `examples/` | Individual scripts | Usage examples for bracket orders, scheduling, news, indicators |
+- **Development:** macOS (darwin), Python >=3.10, `uv` installed, IBKR Client Portal Gateway running at `https://localhost:5001`
+- **Production:** Single-machine execution. No containerization or cloud deployment manifests detected. ibeam (Python package) keeps the gateway session alive. Manual browser login required once unless `IBEAM_AUTHENTICATE=True` with `IBEAM_KEY` set.
+- **Tests:** `pytest` with `asyncio_mode = "auto"`, test paths in `tests/` (unit, integration, agents subdirs)

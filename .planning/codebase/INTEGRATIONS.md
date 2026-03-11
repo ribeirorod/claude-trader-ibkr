@@ -1,81 +1,173 @@
 # External Integrations
 
-**Analysis Date:** 2026-03-10
+**Analysis Date:** 2026-03-11
 
 ## APIs & Services
 | Service | Purpose | SDK/Client | Auth (env var) |
 |---------|---------|------------|----------------|
-| Interactive Brokers TWS/Gateway | Order execution, positions, historical data, news | `ib_insync==0.9.86` | `IB_HOST`, `IB_PORT`, `IB_CLIENT_ID`, `IB_ACCOUNT` (socket, no API key) |
-| Yahoo Finance | Historical OHLCV data, fundamentals, dividends | `yfinance==0.2.43` | None (public) |
-| Financial Modeling Prep (FMP) | Historical prices, company profiles, key metrics, stock screener | `requests` (direct REST) | `FM_API_KEY` |
-| Google Gmail API | Send daily trading signal email reports | `google-api-python-client==2.149.0`, `google-auth==2.35.0` | OAuth2 credentials JSON file (path hardcoded in `volatility/composer/tools/mailing.py`) |
+| IBKR Client Portal Gateway | Order execution, positions, quotes, alerts, market scanner, news | `httpx.AsyncClient` (direct REST via `IBKRRestClient`) | `IB_HOST`, `IB_PORT`, `IB_ACCOUNT` (session cookie after browser login) |
+| IBKR TWS/Gateway (optional) | Same as above, alternate connection mode | `ib_insync>=0.9.86` (optional extra) | Socket connection — TWS must already be authenticated |
+| Benzinga | Financial news and sentiment | `httpx.AsyncClient` (direct REST via `BenzingaClient`) | `BENZINGA_API_KEY` (sent as `token` query param, NOT Authorization header) |
+| Yahoo Finance | Historical OHLCV data for strategy signals | `yfinance>=0.2` | None (public) |
+| Financial Modeling Prep (FMP) | Fundamental screening — earnings, company profiles | `httpx` or `requests` (direct REST) | `FM_API_KEY` (optional) |
+| ibeam | IBKR Client Portal Gateway session keepalive | `ibeam>=0.5.10` (Python package) | `IBEAM_ACCOUNT`, `IBEAM_PASSWORD`, optionally `IBEAM_KEY` (TOTP) |
 
 ## Data Storage
-- **Database:** None detected — no ORM, no SQL client, no managed database.
+- **Database:** None — no ORM, no SQL client, no managed database.
 - **File Storage:** Local filesystem only.
-  - `outputs/` — Runtime outputs: portfolio CSVs, IBKR cache, news, signals, strategy results.
-  - `outputs/ibkr_cache/` — Cached IBKR asset lists.
-  - `results/` — Strategy backtest results.
-  - `volatility/optimized_parameters/` — JSON files with per-ticker optimised strategy parameters.
-  - Pickle files (`.pkl`) used for intermediate data persistence via `volatility/composer/core/data_persistence.py` (`DataPersistence.save_data` / `load_data`).
-  - CSV and JSON exports via `DataPersistence.export_csv` / `export_json`.
-- **Caching:** In-process only.
-  - `IBKRAdapter._qualified_cache` — Dict cache for qualified IBKR contracts (in-memory, per session).
-  - `TTLIdempotencyMap` in `vibe/utils.py` — TTL-based in-memory order deduplication (1 hour TTL, 5000 entry cap).
-  - `IBKRDataFetcher._cache` in `volatility/composer/core/ibkr_data_fetcher.py` — In-memory OHLCV cache keyed by `ticker_start_end_interval`.
+  - `outputs/` — JSON outputs from CLI commands, organized as `outputs/{group}/{YYYY-MM-DD}/{HH-MM-SS}_{sub}.json`
+  - `outputs/news/`, `outputs/scan/`, `outputs/signals/`, `outputs/strategies/`, `outputs/watchlist/` — per-domain output directories
+  - `.trader/logs/agent.jsonl` — JSONL agent event log (append-only, one JSON object per line)
+  - `.trader/profile.json` — User portfolio profile consumed by all agents
+- **Caching:** In-process only. No Redis, Memcached, or persistent cache layer.
 
 ## Auth Provider
-- No user-facing auth. The system authenticates to external services as follows:
-  - **IBKR:** Socket connection to local TWS/Gateway process (no token/key — TWS must already be authenticated by the operator).
-  - **Gmail:** OAuth2 `InstalledAppFlow` using a local service account JSON file (`credentials_path` parameter in `Mailer.__init__`). The path is currently hardcoded as `/Users/rribeiro/private/volatility/composer/config/gcp_volatility_iam.json` in `volatility/composer/tools/mailing.py` — not parameterised via env var.
-  - **FMP:** API key passed via `FM_API_KEY` env var, injected as `apikey` query parameter in all REST calls.
+- No user-facing authentication. The system authenticates to external services as follows:
+  - **IBKR Client Portal Gateway (`ibkr-rest`):** HTTPS to `https://{IB_HOST}:{IB_PORT}/v1/api` with session cookie established by browser login. `IBKRRestClient` disables TLS verification (`verify=False`) because the gateway uses a self-signed certificate. The adapter calls `POST /tickle` then `GET /iserver/auth/status` on `connect()`, retrying up to 8 times with 3-second delays.
+  - **ibeam keepalive:** `ibeam` package maintains the gateway session. Configured via `IBEAM_*` env vars. When `IBEAM_AUTHENTICATE=True`, ibeam logs in automatically using `IBEAM_ACCOUNT`, `IBEAM_PASSWORD`, and `IBEAM_KEY` (base32 TOTP secret). When `False`, manual browser login is required once; ibeam then keeps the session alive.
+  - **IBKR TWS (`ibkr-tws`):** Socket connection via `ib_insync.IB.connectAsync()` to `IB_HOST:IB_PORT`. TWS must already be authenticated. Client ID defaults to `101`.
+  - **Benzinga:** API token sent as `token` query parameter. Header must include `Accept: application/json` (NOT `Authorization` header).
   - **Yahoo Finance:** No auth required.
+  - **FMP:** API key sent as `apikey` query parameter.
+
+## IBKR Client Portal Gateway Integration
+
+**Base URL:** `https://{IB_HOST}:{IB_PORT}/v1/api` (constructed in `trader/config.py` `ibkr_rest_base_url` property)
+
+**Client:** `trader/adapters/ibkr_rest/client.py` (`IBKRRestClient`) — `httpx.AsyncClient` with `verify=False`, 30-second timeout.
+
+**Adapter:** `trader/adapters/ibkr_rest/adapter.py` (`IBKRRestAdapter`)
+
+**Endpoints used:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/tickle` | POST | Initialize/refresh gateway session |
+| `/iserver/auth/status` | GET | Check authentication state |
+| `/iserver/secdef/search?symbol={ticker}` | GET | Resolve ticker → conid |
+| `/iserver/secdef/strikes?conid=...&sectype=OPT&month=...` | GET | Option chain strikes |
+| `/iserver/secdef/info?conid=...&sectype=OPT&month=...&strike=...&right=...` | GET | Resolve option conid |
+| `/iserver/marketdata/snapshot?conids=...&fields=...` | GET | Real-time quotes (fields: 31=last, 84=bid, 86=ask) |
+| `/iserver/account/orders` | GET | List open orders |
+| `/iserver/account/{acct}/orders` | POST | Place new order |
+| `/iserver/account/{acct}/order/{id}` | POST | Modify order |
+| `/iserver/account/{acct}/order/{id}` | DELETE | Cancel order |
+| `/iserver/reply/{id}` | POST | Confirm IBKR warning dialogs (required for order submission) |
+| `/portfolio/{acct}/summary` | GET | Account balance and margin |
+| `/portfolio/{acct}/positions/0` | GET | Open positions |
+| `/iserver/news/news?conid=...&limit=...` | GET | News by conid |
+| `/iserver/account/{acct}/alerts` | GET | List price alerts |
+| `/iserver/account/{acct}/alert` | POST | Create price alert |
+| `/iserver/account/{acct}/alert/{id}` | DELETE | Delete alert |
+| `/iserver/scanner/run` | POST | Run market scanner |
+| `/iserver/scanner/params` | GET | Available scanner parameters |
+
+**Order confirmation flow:** IBKR may return `{"id": "...", "message": [...]}` instead of `{"order_id": "..."}`. `_confirm_replies()` loops up to 5 times posting `{"confirmed": true}` to `/iserver/reply/{id}` until a real order ID is returned.
+
+**Quote snapshot retry:** First snapshot call subscribes the stream; a 1-second sleep + retry is performed for conids that return no price data.
+
+**Order types supported:** `market` (MKT), `limit` (LMT), `stop` (STP), `trailing_stop` (TRAIL), `bracket` (LMT parent + LMT take-profit + STP stop-loss children linked via `parentId`).
+
+## Benzinga News Integration
+
+**Client:** `trader/news/benzinga.py` (`BenzingaClient`) — `httpx.AsyncClient`, 15-second timeout.
+
+**Base URL:** `https://api.benzinga.com/api/v2`
+
+**Endpoints used:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/news` | GET | Fetch news by ticker symbols |
+
+**Request parameters:**
+```python
+params = {
+    "token": BENZINGA_API_KEY,       # auth — query param, NOT Authorization header
+    "symbols": "AAPL,MSFT",          # comma-separated tickers
+    "pageSize": limit,
+    "displayOutput": "abstract",
+}
+headers = {"Accept": "application/json"}
+```
+
+**Response mapping:** `id`, `title` → `headline`, `teaser` → `summary`, `created` → `published_at`, `url`, `stocks[0].name` → `ticker`. Returns list of `NewsItem` Pydantic models.
+
+**Usage in CLI:** `trader news get --tickers AAPL,MSFT` and as sentiment signal filter in `trader strategies signals --with-news`.
+
+## Yahoo Finance Integration
+- Used via `yfinance` package for historical OHLCV data fetching.
+- Data feeds into strategy `signals()` methods via `pd.DataFrame` with columns `open`, `high`, `low`, `close`, `volume`.
+- No API key required.
+
+## ibeam Session Keepalive
+
+**Package:** `ibeam>=0.5.10`
+
+**Config via env vars:**
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `IBEAM_ACCOUNT` | IBKR account username | — |
+| `IBEAM_PASSWORD` | IBKR login password | — |
+| `IBEAM_GATEWAY_BASE_URL` | Gateway HTTPS URL | `https://localhost:5001` |
+| `IBEAM_LOG_LEVEL` | Log verbosity | `WARNING` |
+| `IBEAM_AUTHENTICATE` | Automatic login | `False` |
+| `IBEAM_KEY` | Base32 TOTP secret for 2FA (only if `IBEAM_AUTHENTICATE=True`) | unset |
+
+**Setup flow (from `.env.example`):**
+1. Download and unzip `clientportal.gw.zip` → `clientportal.gw/`
+2. Start: `cd clientportal.gw && ./bin/run.sh root/conf.yaml`
+3. Browse to `https://localhost:5001` and log in once (manual mode)
+4. Run `./scripts/start-gateway.sh` — ibeam keeps the session alive
+
+## Claude Agent/Skill Integrations
+
+**Not external HTTP services** — these are Claude Code prompt files that orchestrate the Python CLI.
+
+**Agents** (`.claude/agents/*.md`): Markdown prompt files defining Claude subagents. Each agent uses the `trader` CLI commands as its primary tool. Key agents:
+- `portfolio-conductor.md` — orchestrates pre-market, intraday, and weekly autonomous runs
+- `portfolio-manager.md` — investment analysis and trade recommendations
+- `risk-monitor.md` — position risk assessment
+- `strategy-optimizer.md` — strategy parameter tuning
+- `opportunity-finder.md` — new trade opportunity discovery
+
+**Skills** (`.claude/skills/*/`): Reusable prompt fragments referenced by agents. Includes `trader-cli` (CLI command reference), `morning-routine`, `technical-analyst`, `market-news-analyst`, `options-strategy-advisor`, `position-sizer`, `backtest-expert`, and others.
+
+**Scheduling:** `.claude/crons.json` defines recurring agent schedules (pre-market, intraday, weekly). `scripts/setup-crons.sh` is a SessionStart hook that prints registration instructions for Claude Code's `CronCreate` tool.
+
+**Agent runtime data (Python side):**
+- `trader/agents/log.py` — `AgentLog` writes/reads JSONL events at `.trader/logs/agent.jsonl`
+- `trader/agents/context.py` — `build_context()` assembles snapshot + profile + guardrails dict for agent prompts; `load_profile()` reads `.trader/profile.json`
 
 ## Observability
-- **Error Tracking:** None (no Sentry, Rollbar, etc.).
-- **Logging:**
-  - `vibe/` module: stdlib `logging` directly.
-  - `volatility/` module: stdlib `logging` with optional YAML config (`config/logging.yaml`) loaded in `volatility/composer/core/config.py`.
-  - `structlog>=23,<25` is declared in `requirements.txt` but not observed in use within source files.
-  - Log level defaults to `INFO`; overridable via `LOG_CFG` env var pointing to a YAML config path.
+- **Error Tracking:** None (no Sentry, Rollbar, Datadog).
+- **Logging:** No structured logging framework. CLI uses `click.echo()` for stdout/stderr. Agent events use custom JSONL log at `.trader/logs/agent.jsonl`.
+- **Agent audit trail:** Every agent run emits structured JSON events via `AgentLog.write()` with fields: `ts`, `run_id`, `agent`, `event`, `context`.
 
 ## CI/CD & Deployment
-- **Hosting:** Not detected — no Dockerfile, docker-compose, Procfile, or cloud provider config found.
+- **Hosting:** Not detected — no Dockerfile, docker-compose, Procfile, or cloud provider config.
 - **CI:** Not detected — no `.github/workflows/`, `.circleci/`, or similar.
-- **Execution:** Scripts are run manually or via shell (`run_test.sh` at project root).
+- **Execution:** `trader` CLI run manually or via Claude Code cron scheduling. ibeam manages gateway session.
 
 ## Required Environment Variables
 | Variable | Service | Required |
 |----------|---------|----------|
-| `IB_HOST` | IBKR TWS/Gateway host | No (defaults to `127.0.0.1`) |
-| `IB_PORT` | IBKR TWS/Gateway port | No (defaults to `7497`) |
-| `IB_CLIENT_ID` | IBKR connection client ID | No (defaults to `101`) |
-| `IB_ACCOUNT` | IBKR account filter | No |
-| `ORDER_TIMEOUT` | IBKR order placement timeout (ms) | No (defaults to `5000`) |
-| `HISTORY_TIMEOUT` | IBKR historical data timeout (ms) | No (defaults to `10000`) |
-| `MAX_CONCURRENT_ORDERS` | Order concurrency cap | No (defaults to `10`) |
-| `FM_API_KEY` | Financial Modeling Prep REST API | Yes (if using `FMPDataFetcher`) |
-| `LOG_CFG` | Path to logging YAML config | No |
+| `IB_HOST` | IBKR Client Portal Gateway host | No (default: `127.0.0.1`) |
+| `IB_PORT` | IBKR Client Portal HTTPS port | No (default: `5000`; use `5001` in practice) |
+| `IB_ACCOUNT` | IBKR account ID | Yes (for most commands) |
+| `BENZINGA_API_KEY` | Benzinga news REST API | Yes (for news/sentiment commands) |
+| `DEFAULT_BROKER` | Broker adapter selector | No (default: `ibkr-rest`) |
+| `DEFAULT_STRATEGY` | Default strategy | No (default: `rsi`) |
+| `MAX_POSITION_PCT` | Max single-position size fraction | No (default: `0.05`) |
+| `AGENT_MODE` | Agent execution mode | No (default: `autonomous`; recommend `supervised`) |
+| `AGENT_LOG_PATH` | Path for JSONL agent log | No (default: `.trader/logs/agent.jsonl`) |
+| `AGENT_PROFILE_PATH` | Path for portfolio profile JSON | No (default: `.trader/profile.json`) |
+| `IBEAM_ACCOUNT` | ibeam — IBKR login username | Yes (for ibeam keepalive) |
+| `IBEAM_PASSWORD` | ibeam — IBKR login password | Yes (for ibeam keepalive) |
+| `IBEAM_GATEWAY_BASE_URL` | ibeam — gateway URL | No (default: `https://localhost:5001`) |
+| `IBEAM_AUTHENTICATE` | ibeam — auto-login mode | No (default: `False`) |
+| `IBEAM_KEY` | ibeam — base32 TOTP secret | Only if `IBEAM_AUTHENTICATE=True` |
+| `FM_API_KEY` | Financial Modeling Prep | No (only for fundamental screeners) |
+| `IBKR_USERNAME`, `IBKR_PASSWORD` | TWS adapter credentials | Only if `--broker ibkr-tws` |
 
 ## Webhooks
 - **Incoming:** None.
-- **Outgoing:** None (email is push via Gmail API, not a webhook).
-
-## IBKR Connection Details
-The `IBKRAdapter` in `vibe/venues/ibkr.py` connects via `ib_insync.IB.connectAsync()` to a locally-running TWS or IB Gateway process. The connection uses:
-- Auto-retry on `asyncio.TimeoutError` (3 retries, exponential backoff starting at 100ms).
-- Client IDs are managed manually: `vibe/` defaults to `IB_CLIENT_ID=101`; `volatility/composer/core/ibkr_data_fetcher.py` uses a global counter starting at `300` to avoid collision when multiple `IBKRDataFetcher` instances are created in the same process.
-- IBKR only allows one connection per `clientId`, so running multiple scripts simultaneously requires distinct `IB_CLIENT_ID` values.
-
-## FMP Integration Details
-`FMPDataFetcher` in `volatility/composer/core/data_fetchers.py` calls three FMP endpoint families:
-- `GET /api/v3/stock-screener` — ticker discovery by industry
-- `GET /api/v4/historical-price/{ticker}` — OHLCV history
-- `GET /api/v3/profile/{ticker}` — company profile
-- `GET /api/v3/key-metrics-ttm/{ticker}` — key financial metrics
-- `GET /api/v3/ratios-ttm/{ticker}` — financial ratios
-
-All calls use `requests` with a 10-second timeout. Errors are logged and silently skipped per ticker.
-
-## Gmail Integration Details
-`Mailer` in `volatility/composer/tools/mailing.py` uses `google-auth-oauthlib.flow.InstalledAppFlow` to authenticate interactively via a local browser. The credentials JSON path and recipient address (`eurodribeiro@gmail.com`) are hardcoded — this is a development-stage implementation. The module-level code at the bottom of `mailing.py` executes on import (instantiating `Mailer` and calling `send_daily_update`), which is a side-effect risk.
+- **Outgoing:** None.
