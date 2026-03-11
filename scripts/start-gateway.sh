@@ -31,4 +31,5 @@ echo "  → Open $IBEAM_GATEWAY_BASE_URL in your browser and log in once."
 echo "  → ibeam will keep the session alive from there."
 echo ""
 
-exec uv run ibeam
+IBEAM_STARTER="$ROOT/.venv/lib/python3.10/site-packages/ibeam/ibeam_starter.py"
+exec uv run python "$IBEAM_STARTER" -m
