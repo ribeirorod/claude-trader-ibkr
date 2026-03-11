@@ -2,7 +2,8 @@ from __future__ import annotations
 from trader.adapters.base import Adapter
 from trader.models import (
     Account, Balance, Margin, Order, OrderRequest,
-    Position, Quote, OptionChain, OptionContract, NewsItem
+    Position, Quote, OptionChain, OptionContract, NewsItem,
+    Alert, ScanResult,
 )
 from trader.config import Config
 
@@ -187,3 +188,18 @@ class IBKRTWSAdapter(Adapter):
                     source=n.providerCode,
                 ))
         return items
+
+    async def scan(self, scan_type: str, location: str = "STK.US.MAJOR", filters: list[dict] | None = None, limit: int = 20) -> list[ScanResult]:
+        raise NotImplementedError("Scanner not supported on ibkr-tws; use ibkr-rest")
+
+    async def scan_params(self) -> dict:
+        raise NotImplementedError("Scanner not supported on ibkr-tws; use ibkr-rest")
+
+    async def list_alerts(self) -> list[Alert]:
+        raise NotImplementedError("Alerts not supported on ibkr-tws; use ibkr-rest")
+
+    async def create_alert(self, ticker: str, operator: str, price: float, name: str | None = None) -> Alert:
+        raise NotImplementedError("Alerts not supported on ibkr-tws; use ibkr-rest")
+
+    async def delete_alert(self, alert_id: str) -> bool:
+        raise NotImplementedError("Alerts not supported on ibkr-tws; use ibkr-rest")

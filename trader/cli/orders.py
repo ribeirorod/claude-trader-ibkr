@@ -94,11 +94,23 @@ def bracket(ctx, ticker, qty, entry, take_profit, stop_loss):
         price=entry, take_profit=take_profit, stop_loss=stop_loss,
     ))
 
+def _resolve_qty(positions, ticker, qty_override):
+    """Return qty_override if given, else look up open position size."""
+    if qty_override:
+        return qty_override
+    pos = next((p for p in positions if p.ticker == ticker), None)
+    if pos and abs(pos.qty) > 0:
+        return abs(pos.qty)
+    raise click.UsageError(
+        f"No open position found for {ticker}. Use --qty to specify size explicitly."
+    )
+
 @orders.command()
 @click.argument("ticker")
 @click.option("--price", type=float, required=True, help="Stop loss trigger price.")
+@click.option("--qty", type=float, default=None, help="Quantity (auto-detected from position if omitted).")
 @click.pass_context
-def stop(ctx, ticker, price):
+def stop(ctx, ticker, price, qty):
     """
     Set a stop-loss order on an existing position.
 
@@ -109,10 +121,9 @@ def stop(ctx, ticker, price):
         await adapter.connect()
         try:
             positions = await adapter.list_positions()
-            pos = next((p for p in positions if p.ticker == ticker), None)
-            qty = abs(pos.qty) if pos else 0
+            size = _resolve_qty(positions, ticker, qty)
             return await adapter.place_order(OrderRequest(
-                ticker=ticker, qty=qty, side="sell",
+                ticker=ticker, qty=size, side="sell",
                 order_type="stop", price=price
             ))
         finally:
@@ -130,8 +141,9 @@ def stop(ctx, ticker, price):
               help="Trailing amount as percentage e.g. 2.5 for 2.5%%.")
 @click.option("--trail-amount", type=float, default=None,
               help="Trailing amount in dollars e.g. 5.00.")
+@click.option("--qty", type=float, default=None, help="Quantity (auto-detected from position if omitted).")
 @click.pass_context
-def trailing_stop(ctx, ticker, trail_percent, trail_amount):
+def trailing_stop(ctx, ticker, trail_percent, trail_amount, qty):
     """
     Set a trailing stop on an existing position.
 
@@ -140,16 +152,31 @@ def trailing_stop(ctx, ticker, trail_percent, trail_amount):
     """
     if trail_percent is None and trail_amount is None:
         raise click.UsageError("Provide --trail-percent or --trail-amount")
-    _run_order(ctx, OrderRequest(
-        ticker=ticker, qty=0, side="sell", order_type="trailing_stop",
-        trail_percent=trail_percent, trail_amount=trail_amount,
-    ))
+    adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+    async def run():
+        await adapter.connect()
+        try:
+            positions = await adapter.list_positions()
+            size = _resolve_qty(positions, ticker, qty)
+            return await adapter.place_order(OrderRequest(
+                ticker=ticker, qty=size, side="sell", order_type="trailing_stop",
+                trail_percent=trail_percent, trail_amount=trail_amount,
+            ))
+        finally:
+            await adapter.disconnect()
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @orders.command("take-profit")
 @click.argument("ticker")
 @click.option("--price", type=float, required=True, help="Take profit target price.")
+@click.option("--qty", type=float, default=None, help="Quantity (auto-detected from position if omitted).")
 @click.pass_context
-def take_profit(ctx, ticker, price):
+def take_profit(ctx, ticker, price, qty):
     """
     Set a take-profit limit order on an existing position.
 
@@ -160,10 +187,9 @@ def take_profit(ctx, ticker, price):
         await adapter.connect()
         try:
             positions = await adapter.list_positions()
-            pos = next((p for p in positions if p.ticker == ticker), None)
-            qty = abs(pos.qty) if pos else 0
+            size = _resolve_qty(positions, ticker, qty)
             return await adapter.place_order(OrderRequest(
-                ticker=ticker, qty=qty, side="sell",
+                ticker=ticker, qty=size, side="sell",
                 order_type="limit", price=price
             ))
         finally:
