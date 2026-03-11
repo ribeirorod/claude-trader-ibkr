@@ -21,7 +21,7 @@ echo "The following cron schedules must be registered via CronCreate for the"
 echo "autonomous portfolio agent system to run. Please call CronCreate for each:"
 echo ""
 
-python3 - <<'PYEOF'
+/opt/homebrew/bin/python3.12 - <<'PYEOF'
 import json, sys
 from pathlib import Path
 

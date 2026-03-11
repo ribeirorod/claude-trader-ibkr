@@ -154,6 +154,8 @@ Pass `geo_context` to **all** specialist agents in Step 6.
 
 **Bootstrap detection:** If positions = 0 AND open buy orders = 0 (a fresh or reset account), set `bootstrap = true`. Pass this flag to `opportunity-finder` and `portfolio-health` so they know to propose a full initial allocation rather than incremental adjustments. Skip `risk-monitor` (nothing to protect) and skip `strategy-optimizer` (no history to optimise yet). Note: orphaned GTC stop orders with no matching position or buy order do NOT count — `order-alert-manager` will cancel them in Step 6.
 
+**Bootstrap position limit:** When `bootstrap = true`, use `max_new_positions_bootstrap` (default 6) instead of the per-slot and per-day limits. Bootstrap orders do **not** count toward `max_new_positions_per_day` or `max_new_positions_per_slot` — they are a one-time portfolio establishment event, not normal trading activity. Log each bootstrap order with `"bootstrap": true` in the ORDER_INTENT event.
+
 Based on time slot, portfolio state, and recent log:
 
 - **Always** run `risk-monitor` if there are open positions
@@ -209,7 +211,9 @@ For each proposed trade:
 - **HARD RULE — never exceed cash**: total cost of new order must fit within `cash - (sum of all pending open buy orders)`. Never rely on `buying_power` — it is margin and must be ignored.
 - Single position ≤ `max_single_position_pct`% of net liquidation
 - **Cash floor** — if `cash - pending_buy_cost < min_cash_reserve_pct% * net_liquidation`, block ALL new buys; log `CASH_FLOOR_BLOCK` and skip
-- Daily new positions ≤ `max_new_positions_per_day` (count from today's log entries)
+- **Per-slot limit** — new positions opened in this run ≤ `max_new_positions_per_slot` (count ORDER_INTENTs in the current run_id only). Slot = one cron invocation.
+- **Daily limit** — new positions opened today ≤ `max_new_positions_per_day` (count non-bootstrap ORDER_INTENTs from today's log where `"bootstrap"` is absent or false)
+- **Bootstrap exception** — if `bootstrap = true`, apply `max_new_positions_bootstrap` instead; bootstrap ORDER_INTENTs are excluded from per-slot and per-day counts in all future runs today
 - Skip and log reason if any guardrail is breached
 
 **Pending buy cost** = sum of `qty * limit_price` for all open buy orders from `trader orders list --status open`.
