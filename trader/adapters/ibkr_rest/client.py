@@ -5,8 +5,10 @@ from trader.config import Config
 class IBKRRestClient:
     def __init__(self, config: Config):
         self._base = config.ibkr_rest_base_url
-        # Client Portal uses self-signed cert — disable verification
-        self._http = httpx.AsyncClient(verify=False, timeout=30.0)
+        # Client Portal Gateway uses a self-signed cert on localhost — disable
+        # verification only when connecting to a loopback address.
+        _local = config.ib_host in ("127.0.0.1", "localhost", "::1")
+        self._http = httpx.AsyncClient(verify=not _local, timeout=30.0)
 
     async def get(self, path: str, **kwargs) -> dict:
         r = await self._http.get(f"{self._base}{path}", **kwargs)

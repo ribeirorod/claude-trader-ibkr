@@ -417,8 +417,12 @@ class IBKRRestAdapter(Adapter):
             pending = [r for r in items if "message" in r and "order_id" not in r and "orderId" not in r]
             if not pending:
                 return resp
-            # Confirm the first pending reply; IBKR processes one at a time
+            # Confirm the first pending reply; IBKR processes one at a time.
+            # Log the warning messages so they are visible in agent logs.
             reply_id = pending[0]["id"]
+            messages = pending[0].get("message", [])
+            import sys
+            print(f"[ibkr] confirming order warnings: {messages}", file=sys.stderr)
             resp = await self._client.post(f"/iserver/reply/{reply_id}", json={"confirmed": True})
         return resp
 
@@ -428,6 +432,8 @@ class IBKRRestAdapter(Adapter):
         right: str | None = None
     ) -> int:
         search = await self._client.get(f"/iserver/secdef/search?symbol={ticker}")
+        if not search:
+            raise ValueError(f"Ticker not found: {ticker}")
         underlying_conid = int(search[0]["conid"])
         if contract_type != "option" or not expiry or not strike or not right:
             return underlying_conid
@@ -439,4 +445,6 @@ class IBKRRestAdapter(Adapter):
             f"/iserver/secdef/info?conid={underlying_conid}&sectype=OPT"
             f"&month={month}&strike={strike}&right={right_char}"
         )
+        if not info:
+            raise ValueError(f"No option contract found for {ticker} {month} {right_char} {strike}")
         return int(info[0]["conid"])
