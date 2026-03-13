@@ -20,3 +20,4 @@ class SentimentResult(BaseModel):
     article_count: int
     lookback_hours: int
     top_headlines: list[str]
+    article_velocity: float = 0.0  # articles-per-hour rate relative to baseline
