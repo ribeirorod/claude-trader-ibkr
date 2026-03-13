@@ -110,3 +110,26 @@ def test_buy_passes_outside_earnings_blackout():
         earnings_calendar=mock_ecal, ticker="AAPL",
     )
     assert result["signal"] == 1
+
+def test_buy_suppressed_on_fundamental_veto():
+    from unittest.mock import MagicMock
+    rf = RiskFilter()
+    mock_screener = MagicMock()
+    mock_screener.check.return_value = {"pass": False, "veto_reason": "pe_too_high", "pe": 250, "eps_growth": None}
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None, sentiment=None,
+        fundamental_screener=mock_screener, ticker="XYZ",
+    )
+    assert result["signal"] == 0
+    assert result["filter_reason"] == "fundamental_veto"
+
+def test_buy_passes_fundamental_check():
+    from unittest.mock import MagicMock
+    rf = RiskFilter()
+    mock_screener = MagicMock()
+    mock_screener.check.return_value = {"pass": True, "veto_reason": None, "pe": 20, "eps_growth": 0.15}
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None, sentiment=None,
+        fundamental_screener=mock_screener, ticker="AAPL",
+    )
+    assert result["signal"] == 1
