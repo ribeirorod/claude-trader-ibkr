@@ -123,7 +123,7 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
             filtered = rf.filter(signal=raw_signal, quote=None,
                                   position=None, sentiment=sentiment)
             if sentiment:
-                velocity = getattr(sentiment, "article_velocity", 1.0)
+                velocity = sentiment.article_velocity
                 s_mult = round(max(0.0, 1.0 + sentiment.score * min(velocity, 3.0)), 3)  # floor at 0
             else:
                 s_mult = 1.0
@@ -195,6 +195,7 @@ def optimize(ctx, ticker, strategy, metric):
         "macd": {"fast": [8, 12], "slow": [21, 26], "signal": [7, 9]},
         "ma_cross": {"fast_window": [10, 20], "slow_window": [40, 50]},
         "bnf": {"lookback": [10, 20], "breakout_pct": [0.01, 0.02]},
+        "momentum": {"window": [10, 20, 30], "threshold": [0.02, 0.03, 0.05]},
     }
     strat_cls = get_strategy(strategy).__class__
     opt = Optimizer()
