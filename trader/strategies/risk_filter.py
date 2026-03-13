@@ -14,6 +14,7 @@ class RiskFilter:
         stop_pct: float | None = None,
         dividend_calendar=None,
         earnings_calendar=None,
+        fundamental_screener=None,
         ticker: str | None = None,
         ex_div_within_days: int = 5,
         earnings_blackout_days: int = 3,
@@ -32,6 +33,11 @@ class RiskFilter:
         if earnings_calendar is not None and ticker:
             if earnings_calendar.is_in_blackout(ticker, blackout_days=earnings_blackout_days):
                 return {"signal": 0, "filtered": True, "filter_reason": "earnings_blackout"}
+
+        if fundamental_screener is not None and ticker:
+            check = fundamental_screener.check(ticker)
+            if not check["pass"]:
+                return {"signal": 0, "filtered": True, "filter_reason": "fundamental_veto"}
 
         if sentiment and sentiment.score < min_sentiment:
             return {"signal": 0, "filtered": True, "filter_reason": "sentiment_bearish"}
