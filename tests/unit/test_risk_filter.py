@@ -64,3 +64,26 @@ def test_buy_passes_when_above_stop():
         stop_pct=0.05,
     )
     assert result["signal"] == 1
+
+def test_buy_suppressed_near_ex_div():
+    from unittest.mock import MagicMock
+    rf = RiskFilter()
+    mock_cal = MagicMock()
+    mock_cal.is_near_ex_div.return_value = True
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None, sentiment=None,
+        dividend_calendar=mock_cal, ticker="AAPL",
+    )
+    assert result["signal"] == 0
+    assert result["filter_reason"] == "near_ex_div"
+
+def test_buy_passes_when_not_near_ex_div():
+    from unittest.mock import MagicMock
+    rf = RiskFilter()
+    mock_cal = MagicMock()
+    mock_cal.is_near_ex_div.return_value = False
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None, sentiment=None,
+        dividend_calendar=mock_cal, ticker="AAPL",
+    )
+    assert result["signal"] == 1
