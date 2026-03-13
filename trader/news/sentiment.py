@@ -26,6 +26,13 @@ def _score_item(item: NewsItem) -> float:
     bear = sum(1 for t in tokens if t in _BEARISH)
     return (bull - bear) / len(tokens)
 
+def _parse_dt(published_at: str):
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return datetime.now(timezone.utc)
+
 class SentimentScorer:
     def score(
         self,
@@ -67,6 +74,30 @@ class SentimentScorer:
         else:
             signal = "neutral"
 
+        # Velocity: ratio of (articles/hr in last 4h) vs (articles/hr in prior 20h)
+        now = datetime.now(timezone.utc)
+        cutoff_recent = now - timedelta(hours=4)
+        cutoff_baseline = now - timedelta(hours=24)
+
+        recent_count = sum(
+            1 for item in filtered
+            if _parse_dt(item.published_at) >= cutoff_recent
+        )
+        baseline_count = sum(
+            1 for item in filtered
+            if cutoff_baseline <= _parse_dt(item.published_at) < cutoff_recent
+        )
+
+        recent_rate = recent_count / 4.0   # articles per hour in last 4h
+        baseline_rate = baseline_count / 20.0  # articles per hour in prior 20h
+
+        if baseline_rate > 0:
+            velocity = recent_rate / baseline_rate
+        elif recent_rate > 0:
+            velocity = 2.0  # spike with no baseline → treat as elevated
+        else:
+            velocity = 0.0
+
         return SentimentResult(
             ticker=ticker,
             score=round(clamped, 3),
@@ -74,4 +105,5 @@ class SentimentScorer:
             article_count=len(filtered),
             lookback_hours=lookback_hours,
             top_headlines=[item.headline for item, _ in scored[:3]],
+            article_velocity=round(velocity, 3),
         )
