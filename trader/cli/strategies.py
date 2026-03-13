@@ -122,6 +122,11 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
             sentiment = sentiments.get(ticker)
             filtered = rf.filter(signal=raw_signal, quote=None,
                                   position=None, sentiment=sentiment)
+            if sentiment:
+                velocity = getattr(sentiment, "article_velocity", 1.0)
+                s_mult = round(max(0.0, 1.0 + sentiment.score * min(velocity, 3.0)), 3)  # floor at 0
+            else:
+                s_mult = 1.0
             results.append({
                 "ticker": ticker,
                 "signal": filtered["signal"],
@@ -130,6 +135,8 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
                 "filtered": filtered["filtered"],
                 "filter_reason": filtered["filter_reason"],
                 "sentiment_score": sentiment.score if sentiment else None,
+                "sentiment_velocity": sentiment.article_velocity if sentiment else None,
+                "sentiment_multiplier": s_mult,
                 "atr": current_atr,
                 "stop_level": sl,
             })
