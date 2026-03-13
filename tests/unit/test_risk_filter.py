@@ -87,3 +87,26 @@ def test_buy_passes_when_not_near_ex_div():
         dividend_calendar=mock_cal, ticker="AAPL",
     )
     assert result["signal"] == 1
+
+def test_buy_suppressed_in_earnings_blackout():
+    from unittest.mock import MagicMock
+    rf = RiskFilter()
+    mock_ecal = MagicMock()
+    mock_ecal.is_in_blackout.return_value = True
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None, sentiment=None,
+        earnings_calendar=mock_ecal, ticker="AAPL",
+    )
+    assert result["signal"] == 0
+    assert result["filter_reason"] == "earnings_blackout"
+
+def test_buy_passes_outside_earnings_blackout():
+    from unittest.mock import MagicMock
+    rf = RiskFilter()
+    mock_ecal = MagicMock()
+    mock_ecal.is_in_blackout.return_value = False
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None, sentiment=None,
+        earnings_calendar=mock_ecal, ticker="AAPL",
+    )
+    assert result["signal"] == 1
