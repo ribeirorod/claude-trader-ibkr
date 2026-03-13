@@ -17,7 +17,7 @@ class RiskFilter:
             return {"signal": signal, "filtered": False, "filter_reason": None}
 
         # Stop-breach: current price below stop level of existing position
-        if stop_pct is not None and position and quote and quote.last and position.avg_cost:
+        if stop_pct is not None and position is not None and quote is not None and quote.last and position.avg_cost is not None:
             stop = position.avg_cost * (1 - stop_pct)
             if quote.last < stop:
                 return {"signal": 0, "filtered": True, "filter_reason": "stop_breach"}
