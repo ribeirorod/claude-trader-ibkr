@@ -62,3 +62,14 @@ def test_momentum_registered_in_factory():
     from trader.strategies.factory import get_strategy
     strat = get_strategy("momentum")
     assert isinstance(strat, MomentumStrategy)
+
+def test_momentum_benchmark_suppresses_weak_stock():
+    """Stock with positive ROC but weaker than benchmark → no buys fired."""
+    strat = MomentumStrategy({"window": 10, "threshold": 0.01})
+    # Weak stock: gentle uptrend
+    weak_stock = make_ohlcv(100, trend=0.2, seed=7)
+    # Very strong benchmark: aggressive uptrend → bench_roc > stock_roc
+    strong_bench = make_ohlcv(100, trend=3.0, seed=8)
+    signals = strat.signals(weak_stock, benchmark=strong_bench)
+    # Stock ROC barely exceeds threshold but benchmark ROC >> stock ROC → buy suppressed
+    assert (signals == 1).sum() == 0
