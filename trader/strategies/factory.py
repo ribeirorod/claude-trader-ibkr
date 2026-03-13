@@ -2,6 +2,7 @@ from trader.strategies.rsi import RSIStrategy
 from trader.strategies.macd import MACDStrategy
 from trader.strategies.ma_cross import MACrossStrategy
 from trader.strategies.bnf import BNFStrategy
+from trader.strategies.momentum import MomentumStrategy
 from trader.strategies.base import BaseStrategy
 
 _REGISTRY = {
@@ -9,6 +10,7 @@ _REGISTRY = {
     "macd": MACDStrategy,
     "ma_cross": MACrossStrategy,
     "bnf": BNFStrategy,
+    "momentum": MomentumStrategy,
 }
 
 def get_strategy(name: str, params: dict | None = None) -> BaseStrategy:
