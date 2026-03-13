@@ -133,3 +133,23 @@ def test_buy_passes_fundamental_check():
         fundamental_screener=mock_screener, ticker="AAPL",
     )
     assert result["signal"] == 1
+
+def test_buy_suppressed_when_position_limit_reached():
+    from trader.models import Position
+    rf = RiskFilter()
+    # position is 5% of 100k account at $100/share = $5000 = 50 shares
+    # max_position_pct=0.05 means we're exactly at the limit → suppress
+    pos = Position(
+        ticker="AAPL", qty=50, avg_cost=100.0,
+        market_value=5000.0, unrealized_pnl=0.0,
+    )
+    result = rf.filter(
+        signal=1,
+        quote=make_quote(last=100.0),
+        position=pos,
+        sentiment=None,
+        account_value=100_000,
+        max_position_pct=0.05,
+    )
+    assert result["signal"] == 0
+    assert result["filter_reason"] == "position_limit"
