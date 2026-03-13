@@ -46,13 +46,24 @@ def test_stop_level_respects_multiplier():
 def test_position_size_respects_risk():
     df = make_ohlcv()
     entry = df["close"].iloc[-1]
+    account_value = 100_000
+    risk_pct = 0.01
+    atr_multiplier = 2.0
     size = position_size(
         df, entry_price=entry,
-        account_value=100_000, risk_pct=0.01,
-        atr_multiplier=2.0, period=14,
+        account_value=account_value, risk_pct=risk_pct,
+        atr_multiplier=atr_multiplier, period=14,
     )
     assert isinstance(size, int)
     assert size > 0
+    # verify the risk-dollar contract: size * risk_per_share ≈ dollar_risk
+    from trader.strategies.stop_loss import atr as compute_atr
+    current_atr = float(compute_atr(df, period=14).iloc[-1])
+    risk_per_share = atr_multiplier * current_atr
+    dollar_risk = account_value * risk_pct
+    # Allow ±1 share of rounding tolerance
+    expected = int(dollar_risk / risk_per_share)
+    assert abs(size - expected) <= 1
 
 def test_position_size_larger_account_more_shares():
     df = make_ohlcv()
