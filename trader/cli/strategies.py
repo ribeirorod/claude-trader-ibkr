@@ -19,7 +19,7 @@ def strategies():
 # Map short tickers (as used everywhere in this system) to their yfinance symbols.
 _YF_TICKER_MAP: dict[str, str] = {
     "CSPX": "CSPX.L", "VUSA": "VUSA.AS", "IWDA": "IWDA.L", "SWDA": "SWDA.L",
-    "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L", "XLES": "XLES.DE",
+    "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L",
     "SGLN": "SGLN.L", "PHAU": "PHAU.L", "AGGH": "AGGG.L", "IBTA": "IBTA.L",
     "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
 }
