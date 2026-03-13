@@ -11,10 +11,16 @@ class RiskFilter:
         max_position_pct: float = 0.05,
         min_sentiment: float = -0.2,
         account_value: float | None = None,
+        stop_pct: float | None = None,
     ) -> dict:
-        # Sells are never suppressed
         if signal != 1:
             return {"signal": signal, "filtered": False, "filter_reason": None}
+
+        # Stop-breach: current price below stop level of existing position
+        if stop_pct is not None and position and quote and quote.last and position.avg_cost:
+            stop = position.avg_cost * (1 - stop_pct)
+            if quote.last < stop:
+                return {"signal": 0, "filtered": True, "filter_reason": "stop_breach"}
 
         # Suppress buy on bearish news
         if sentiment and sentiment.score < min_sentiment:

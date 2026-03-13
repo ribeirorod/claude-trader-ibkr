@@ -30,3 +30,37 @@ def test_sell_never_suppressed():
                        sentiment=make_sentiment(-0.9))
     assert result["signal"] == -1
     assert result["filtered"] is False
+
+from trader.models import Position
+
+def make_position(avg_cost=90.0, qty=10):
+    return Position(
+        ticker="AAPL", qty=qty, avg_cost=avg_cost,
+        market_value=qty * 100.0, unrealized_pnl=(100.0 - avg_cost) * qty,
+    )
+
+def test_buy_suppressed_when_stop_breached():
+    rf = RiskFilter()
+    # avg_cost=110, stop_pct=0.05 → stop=104.5; current price=100 → breach
+    pos = make_position(avg_cost=110.0)
+    result = rf.filter(
+        signal=1,
+        quote=make_quote(last=100.0),
+        position=pos,
+        sentiment=None,
+        stop_pct=0.05,
+    )
+    assert result["signal"] == 0
+    assert result["filter_reason"] == "stop_breach"
+
+def test_buy_passes_when_above_stop():
+    rf = RiskFilter()
+    pos = make_position(avg_cost=90.0)
+    result = rf.filter(
+        signal=1,
+        quote=make_quote(last=100.0),
+        position=pos,
+        sentiment=None,
+        stop_pct=0.05,
+    )
+    assert result["signal"] == 1
