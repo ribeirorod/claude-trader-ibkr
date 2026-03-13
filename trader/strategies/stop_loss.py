@@ -21,7 +21,7 @@ def stop_level(
 ) -> float:
     """Return the long stop-loss price: entry - (multiplier × ATR)."""
     current_atr = atr(ohlcv, period).iloc[-1]
-    return entry_price - atr_multiplier * current_atr
+    return max(0.01, entry_price - atr_multiplier * current_atr)
 
 def position_size(
     ohlcv: pd.DataFrame,
@@ -37,4 +37,6 @@ def position_size(
     if risk_per_share <= 0:
         return 0
     dollar_risk = account_value * risk_pct
-    return max(1, int(dollar_risk / risk_per_share))
+    shares = int(dollar_risk / risk_per_share)
+    max_shares = int(account_value / entry_price) if entry_price > 0 else shares
+    return max(1, min(shares, max_shares))
