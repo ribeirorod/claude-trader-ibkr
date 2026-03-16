@@ -19,7 +19,7 @@ def create_app(scheduler: Any = None) -> FastAPI:
         jobs: list[dict] = []
         if scheduler and sched_running:
             jobs = [
-                {"id": j.id, "next_run": str(j.next_run_time)}
+                {"id": j.id, "next_run": j.next_run_time.isoformat() if j.next_run_time else None}
                 for j in scheduler.get_jobs()
             ]
         return {
