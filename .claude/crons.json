@@ -70,5 +70,5 @@
     "agent": "system",
     "cmd": "uv run python scripts/ibkr-healthcheck.py",
     "prompt": "Run IBKR session health check. Working directory: /Users/beam/projects/vibe/trader. Run: `uv run python scripts/ibkr-healthcheck.py`. If the session is unauthenticated, the script sends a Telegram alert and triggers ibkr-reauth.py (Playwright). If session recovers, sends a recovery confirmation. No further action needed."
-  },
+  }
 ]
