@@ -96,6 +96,8 @@ _TG_MAX_CHARS = 4000
 
 
 def _build_options(system_prompt: str = SYSTEM_PROMPT) -> ClaudeAgentOptions:
+    # ANTHROPIC_API_KEY is removed from os.environ by __main__.py at startup
+    # so the SDK subprocess inherits an environment without it, forcing OAuth.
     return ClaudeAgentOptions(
         cwd=str(ROOT),
         allowed_tools=["Bash", "Read", "Glob", "Grep"],
@@ -103,7 +105,6 @@ def _build_options(system_prompt: str = SYSTEM_PROMPT) -> ClaudeAgentOptions:
         system_prompt=system_prompt,
         model=_MODEL,
         max_turns=_MAX_TURNS,
-        env={"ANTHROPIC_API_KEY": ""},  # Force Claude Code OAuth session
     )
 
 
