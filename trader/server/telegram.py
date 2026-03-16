@@ -1,3 +1,4 @@
+"""Telegram handler — persistent python-telegram-bot Application with command and message handlers."""
 from __future__ import annotations
 
 import asyncio
