@@ -1,0 +1,10 @@
+.env
+.git
+.venv
+__pycache__
+*.pyc
+.DS_Store
+clientportal.gw.zip
+tests/
+docs/
+.trader/
