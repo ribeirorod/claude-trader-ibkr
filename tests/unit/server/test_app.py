@@ -11,7 +11,6 @@ def test_health_returns_ok():
 
 
 def test_status_returns_scheduler_info(monkeypatch):
-    import trader.server.app as app_module
     monkeypatch.setenv("IBKR_MODE", "paper")
     # Inject a fake scheduler state
     fake_scheduler = type("S", (), {"running": True, "get_jobs": lambda self: []})()
