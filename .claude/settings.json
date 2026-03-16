@@ -5,10 +5,26 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /Users/beam/projects/vibe/trader/scripts/setup-crons.sh"
+            "command": "sh /Users/beam/projects/vibe/trader/scripts/setup-crons.sh"
           }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(rm *)",
+      "Bash(mv .env*)",
+      "Bash(cp .env*)",
+      "Write(.env*)",
+      "Write(*.pem)",
+      "Write(*.key)",
+      "Write(.trader/credentials*)",
+      "Edit(.env*)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.json)",
+      "Bash(rm .claude/settings.json)",
+      "Bash(mv .claude/settings.json*)"
     ]
   }
 }
