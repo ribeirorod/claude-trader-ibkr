@@ -9,6 +9,6 @@ RUN uv sync --frozen --no-dev
 
 COPY . .
 
-EXPOSE 8080
+EXPOSE 9090
 
 CMD ["uv", "run", "trader-server"]

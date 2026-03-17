@@ -211,6 +211,38 @@ Controlled entirely at the gateway login — select **Paper Trading** or **Live 
 
 ---
 
+## Development
+
+### Running the server
+
+```bash
+make server          # start FastAPI + scheduler + Telegram polling
+make kill            # stop it
+```
+
+Or directly: `uv run trader-server`
+
+### Testing
+
+```bash
+make test
+```
+
+> **Always use `make test` or `uv run python -m pytest`** — never bare `pytest`.
+> The system Homebrew `pytest` runs on Python 3.12 and can't see the packages in the uv venv (Python 3.10), causing all server tests to fail with `ModuleNotFoundError`.
+
+### Docker
+
+```bash
+make docker-up       # build image and start in background
+make docker-logs     # tail logs
+make docker-down     # stop and remove containers
+```
+
+Requires a `.env` file at the project root (copy from `.env.example`).
+
+---
+
 ## Common Issues
 
 **`ConnectTimeout`** — Gateway is not running. Start it (`clientportal.gw/bin/run.sh`) and authenticate in the browser.

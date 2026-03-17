@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import structlog
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -13,7 +14,7 @@ from claude_agent_sdk import (
     query,
 )
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 _LOG_PATH = ROOT / ".trader" / "logs" / "agent.jsonl"
@@ -113,6 +114,8 @@ async def ask(text: str, chat_id: str) -> str:
     now = datetime.now().strftime("%a %d %b %Y  %H:%M CET")
     prompt = f"[{now}]\n{text}"
     parts: list[str] = []
+    t0 = time.monotonic()
+    log.info("agent_query_start", source="telegram", preview=text[:80])
 
     async for message in query(prompt=prompt, options=_build_options()):
         if isinstance(message, AssistantMessage):
@@ -122,16 +125,18 @@ async def ask(text: str, chat_id: str) -> str:
         elif isinstance(message, ResultMessage):
             if message.is_error:
                 raise RuntimeError(str(message))
-            if message.result:
-                parts.append(message.result)
+            # ResultMessage.result duplicates the last AssistantMessage — skip it
 
-    return "\n".join(parts).strip()
+    result = "\n".join(parts).strip()
+    log.info("agent_query_done", source="telegram", elapsed_s=round(time.monotonic() - t0, 1))
+    return result
 
 
 async def run_job(prompt: str, slot: str) -> None:
     """Run a scheduled agent job. Logs result to agent.jsonl."""
-    log.info("scheduler: running agent job slot=%s", slot)
+    log.info("agent_job_start", slot=slot)
     parts: list[str] = []
+    t0 = time.monotonic()
 
     try:
         async for message in query(prompt=prompt, options=_build_options()):
@@ -144,11 +149,12 @@ async def run_job(prompt: str, slot: str) -> None:
                     raise RuntimeError(str(message))
 
         result_text = "\n".join(parts).strip()
+        elapsed = round(time.monotonic() - t0, 1)
         _log_event("RUN_END", {"slot": slot, "result_preview": result_text[:200]})
-        log.info("scheduler: agent job complete slot=%s", slot)
+        log.info("agent_job_done", slot=slot, elapsed_s=elapsed)
 
     except Exception as exc:
-        log.error("scheduler: agent job failed slot=%s error=%s", slot, exc)
+        log.error("agent_job_error", slot=slot, error=str(exc))
         _log_event("RUN_ERROR", {"slot": slot, "error": str(exc)})
         raise
 
@@ -164,14 +170,3 @@ def _log_event(event_type: str, data: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def split_for_telegram(text: str, max_chars: int = _TG_MAX_CHARS) -> list[str]:
-    """Split long text at newline boundaries for Telegram's 4096-char limit."""
-    chunks: list[str] = []
-    while len(text) > max_chars:
-        split_at = text.rfind("\n", 0, max_chars)
-        if split_at == -1:
-            split_at = max_chars
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
-    chunks.append(text)
-    return [c for c in chunks if c.strip()]

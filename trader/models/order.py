@@ -29,3 +29,6 @@ class Order(BaseModel):
     price: float | None = None
     filled_price: float | None = None
     filled_qty: float | None = None
+    take_profit: float | None = None
+    stop_loss: float | None = None
+    created_at: str | None = None  # raw IBKR lastExecutionTime
