@@ -19,8 +19,10 @@ Assesses sector rotation patterns and market cycle phase using MA cross trend si
 
 ## Sector ETF Reference
 
-| Sector | ETF | Characteristic |
-|--------|-----|----------------|
+**Signal ETFs (SPDR — for trend/sentiment signals only; NOT tradeable from EU account due to MiFID II):**
+
+| Sector | Signal ETF | Characteristic |
+|--------|-----------|----------------|
 | Technology | XLK | Cyclical / Growth |
 | Financials | XLF | Cyclical / Rate-sensitive |
 | Energy | XLE | Cyclical / Commodity-linked |
@@ -32,6 +34,22 @@ Assesses sector rotation patterns and market cycle phase using MA cross trend si
 | Materials | XLB | Cyclical / Commodity-linked |
 | Real Estate | XLRE | Rate-sensitive |
 | Communication Services | XLC | Cyclical / Growth |
+
+**Tradeable UCITS equivalents (LSE/XETRA-listed — use these to execute rotations):**
+
+| Signal ETF | UCITS Equivalent | Exchange | Notes |
+|-----------|-----------------|----------|-------|
+| XLK / QQQ (tech) | EQQQ | LSE | Nasdaq 100, acc |
+| XLE (energy) | XLES | XETRA | S&P Energy Select Sector, acc |
+| Broad US market | CSPX | LSE | S&P 500, acc |
+| Global / diversified | IWDA | LSE | MSCI World, acc |
+| Europe | IMEU | LSE | MSCI Europe, acc |
+| Emerging Markets | EMIM | LSE | MSCI EM, acc |
+| Gold / commodity | SGLN | LSE | Physical gold, acc |
+| Bonds (safe haven) | IBTA | LSE | US Treasuries 1-3yr, acc |
+| REITs | IUES | LSE | FTSE EPRA/NAREIT, acc |
+
+Use SPDR tickers for reading signals; translate to UCITS tickers for any actual buy/sell orders.
 
 ## CLI Integration
 
@@ -61,12 +79,15 @@ Sentiment score: -1.0 (bearish) → +1.0 (bullish). Combine with trend signal to
 ### Step 3 — Market Breadth Check
 
 ```bash
-# Benchmark ETF trends to anchor regime
+# Benchmark ETF trends to anchor regime (signal reading only — not tradeable from EU account)
 uv run trader strategies signals --tickers SPY,QQQ,IWM --strategy ma_cross
 uv run trader strategies signals --tickers SPY,QQQ,IWM --strategy rsi
+# Cross-check with EU-tradeable equivalents
+uv run trader strategies signals --tickers CSPX,EQQQ,IWDA --strategy ma_cross
 ```
 
 IWM (small caps) leading SPY = early-cycle signal. IWM lagging = late-cycle or risk-off.
+Use CSPX/EQQQ/IWDA signals if IBKR doesn't provide data on SPY/QQQ/IWM from EU account.
 
 ### Step 4 — Individual Stock Confirmation (Optional)
 

@@ -29,7 +29,9 @@
   "portfolio_targets": {
     "max_single_position_pct": 5,
     "max_sector_concentration_pct": 35,
-    "max_new_positions_per_day": 3,
+    "max_new_positions_per_slot": 2,
+    "max_new_positions_per_day": 4,
+    "max_new_positions_bootstrap": 6,
     "target_cash_reserve_pct": 10,
     "min_cash_reserve_pct": 10
   },

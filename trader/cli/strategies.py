@@ -6,6 +6,7 @@ import yfinance as yf
 from trader.strategies.factory import get_strategy, list_strategies
 from trader.strategies.optimizer import Optimizer
 from trader.strategies.risk_filter import RiskFilter
+from trader.strategies.stop_loss import atr as compute_atr, stop_level as compute_stop
 from trader.news.benzinga import BenzingaClient
 from trader.news.sentiment import SentimentScorer
 from trader.cli.__main__ import output_json
@@ -14,8 +15,21 @@ from trader.cli.__main__ import output_json
 def strategies():
     """Strategy signals, backtesting, and parameter optimization."""
 
+# UCITS ETFs listed on LSE (.L), XETRA (.DE), or Euronext (.AS) need exchange suffixes in yfinance.
+# Map short tickers (as used everywhere in this system) to their yfinance symbols.
+_YF_TICKER_MAP: dict[str, str] = {
+    "CSPX": "CSPX.L", "VUSA": "VUSA.AS", "IWDA": "IWDA.L", "SWDA": "SWDA.L",
+    "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L",
+    "SGLN": "SGLN.L", "PHAU": "PHAU.L", "AGGH": "AGGG.L", "IBTA": "IBTA.L",
+    "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
+}
+
+def _resolve_yf_ticker(ticker: str) -> str:
+    """Return the yfinance symbol for a ticker, adding exchange suffix for known UCITS ETFs."""
+    return _YF_TICKER_MAP.get(ticker.upper(), ticker)
+
 def _fetch_ohlcv(ticker: str, interval: str, lookback: str) -> pd.DataFrame:
-    df = yf.download(ticker, period=lookback, interval=interval, progress=False, auto_adjust=True)
+    df = yf.download(_resolve_yf_ticker(ticker), period=lookback, interval=interval, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df.columns = [c.lower() for c in df.columns]
@@ -98,9 +112,21 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
             df = _fetch_ohlcv(ticker, interval, lookback)
             sig_series = strat.signals(df)
             raw_signal = int(sig_series.iloc[-1])
+            try:
+                current_atr = round(float(compute_atr(df).iloc[-1]), 4)
+                entry = float(df["close"].iloc[-1])
+                sl = round(compute_stop(df, entry_price=entry), 4)
+            except Exception:
+                current_atr = None
+                sl = None
             sentiment = sentiments.get(ticker)
             filtered = rf.filter(signal=raw_signal, quote=None,
                                   position=None, sentiment=sentiment)
+            if sentiment:
+                velocity = sentiment.article_velocity
+                s_mult = round(max(0.0, 1.0 + sentiment.score * min(velocity, 3.0)), 3)  # floor at 0
+            else:
+                s_mult = 1.0
             results.append({
                 "ticker": ticker,
                 "signal": filtered["signal"],
@@ -109,6 +135,10 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
                 "filtered": filtered["filtered"],
                 "filter_reason": filtered["filter_reason"],
                 "sentiment_score": sentiment.score if sentiment else None,
+                "sentiment_velocity": sentiment.article_velocity if sentiment else None,
+                "sentiment_multiplier": s_mult,
+                "atr": current_atr,
+                "stop_level": sl,
             })
         except Exception as e:
             results.append({"ticker": ticker, "error": str(e)})
@@ -132,7 +162,7 @@ def backtest(ctx, ticker, strategy, from_date, params):
     import numpy as np
     p = json.loads(params) if params else None
     strat = get_strategy(strategy, p)
-    df = yf.download(ticker, start=from_date, progress=False, auto_adjust=True)
+    df = yf.download(_resolve_yf_ticker(ticker), start=from_date, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df.columns = [c.lower() for c in df.columns]
@@ -165,6 +195,7 @@ def optimize(ctx, ticker, strategy, metric):
         "macd": {"fast": [8, 12], "slow": [21, 26], "signal": [7, 9]},
         "ma_cross": {"fast_window": [10, 20], "slow_window": [40, 50]},
         "bnf": {"lookback": [10, 20], "breakout_pct": [0.01, 0.02]},
+        "momentum": {"window": [10, 20, 30], "threshold": [0.02, 0.03, 0.05]},
     }
     strat_cls = get_strategy(strategy).__class__
     opt = Optimizer()
