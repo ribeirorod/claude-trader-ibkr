@@ -182,10 +182,12 @@ uv run trader scan run LOW_OPT_VOLUME_PUT_CALL_RATIO --market STK.US.MAJOR --lim
 ```
 Tickers appearing in 2+ options scans are strong candidates. Store in `options_candidates` cache segment with IV rank and put/call ratio noted.
 
-**Watchlist tickers:**
+**Watchlist tickers — read all named lists and inject into universe:**
 ```bash
 uv run trader watchlist list
 ```
+
+For each ticker found across all watchlists: add it to the appropriate universe segment (eu/us/etf/options_candidates) and apply the +15 score bonus. This ensures previously discovered candidates stay in the pipeline without requiring a full re-scan.
 
 Merge and score all sources. Write updated `us`, `etf`, `options_candidates` sections and `last_refreshed_us`, `last_refreshed_etf`, `last_refreshed_options` timestamps to cache.
 
@@ -272,10 +274,31 @@ Sizing:
 
 Return top 3. Include `ALERT_PROPOSAL` for each.
 
-For any HIGH priority ticker not on a watchlist yet:
+### Step 6b — Update watchlists (side effect)
+
+Write every survivor back to the correct named list based on its type and source. Use this mapping:
+
+| Ticker type | List |
+|-------------|------|
+| US equity (momentum/breakout) | `momentum` |
+| EU equity | `eu-stocks` |
+| Semiconductor (any exchange) | `semiconductors` |
+| Energy (any exchange) | `energy` |
+| Quantum computing | `quantum` |
+| UCITS ETF | `etf-rotation` |
+| Options candidate | `momentum` (underlying equity) |
+
 ```bash
-uv run trader watchlist add TICKER --list momentum
+# Add each survivor to its list (skip if already present — CLI is idempotent)
+uv run trader watchlist add TICKER --list LIST_NAME
 ```
+
+**Prune tickers that failed validation** (MA cross = -1, sentiment < -0.3, or dropped from universe 3 runs in a row) from their respective lists:
+```bash
+uv run trader watchlist remove FAILED_TICKER --list LIST_NAME
+```
+
+This keeps every watchlist a live, signal-validated universe — not a static graveyard of old picks.
 
 **Do NOT call `trader alerts create` or any order command directly.**
 

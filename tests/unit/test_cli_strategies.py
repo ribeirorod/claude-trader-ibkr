@@ -21,3 +21,19 @@ def test_strategies_signals():
     assert data[0]["ticker"] == "AAPL"
     assert "signal" in data[0]
     assert "filtered" in data[0]
+
+def test_signals_output_contains_sentiment_fields():
+    """signals output must include sentiment_velocity and sentiment_multiplier keys."""
+    runner = CliRunner()
+    with patch("yfinance.download", return_value=make_ohlcv()):
+        result = runner.invoke(
+            cli,
+            ["strategies", "signals", "--tickers", "AAPL", "--strategy", "rsi"],
+        )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    assert "sentiment_multiplier" in data[0]
+    assert "sentiment_velocity" in data[0]
+    assert "atr" in data[0]
+    assert "stop_level" in data[0]

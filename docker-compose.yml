@@ -1,0 +1,12 @@
+services:
+  trader:
+    build: .
+    env_file: .env
+    ports:
+      - "9090:9090"
+    volumes:
+      - trader-data:/app/.trader   # sessions, logs, tmp
+    restart: unless-stopped
+
+volumes:
+  trader-data:

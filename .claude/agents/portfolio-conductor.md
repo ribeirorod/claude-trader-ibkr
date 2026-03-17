@@ -154,6 +154,8 @@ Pass `geo_context` to **all** specialist agents in Step 6.
 
 **Bootstrap detection:** If positions = 0 AND open buy orders = 0 (a fresh or reset account), set `bootstrap = true`. Pass this flag to `opportunity-finder` and `portfolio-health` so they know to propose a full initial allocation rather than incremental adjustments. Skip `risk-monitor` (nothing to protect) and skip `strategy-optimizer` (no history to optimise yet). Note: orphaned GTC stop orders with no matching position or buy order do NOT count — `order-alert-manager` will cancel them in Step 6.
 
+**Bootstrap position limit:** When `bootstrap = true`, use `max_new_positions_bootstrap` (default 6) instead of the per-slot and per-day limits. Bootstrap orders do **not** count toward `max_new_positions_per_day` or `max_new_positions_per_slot` — they are a one-time portfolio establishment event, not normal trading activity. Log each bootstrap order with `"bootstrap": true` in the ORDER_INTENT event.
+
 Based on time slot, portfolio state, and recent log:
 
 - **Always** run `risk-monitor` if there are open positions
@@ -209,7 +211,9 @@ For each proposed trade:
 - **HARD RULE — never exceed cash**: total cost of new order must fit within `cash - (sum of all pending open buy orders)`. Never rely on `buying_power` — it is margin and must be ignored.
 - Single position ≤ `max_single_position_pct`% of net liquidation
 - **Cash floor** — if `cash - pending_buy_cost < min_cash_reserve_pct% * net_liquidation`, block ALL new buys; log `CASH_FLOOR_BLOCK` and skip
-- Daily new positions ≤ `max_new_positions_per_day` (count from today's log entries)
+- **Per-slot limit** — new positions opened in this run ≤ `max_new_positions_per_slot` (count ORDER_INTENTs in the current run_id only). Slot = one cron invocation.
+- **Daily limit** — new positions opened today ≤ `max_new_positions_per_day` (count non-bootstrap ORDER_INTENTs from today's log where `"bootstrap"` is absent or false)
+- **Bootstrap exception** — if `bootstrap = true`, apply `max_new_positions_bootstrap` instead; bootstrap ORDER_INTENTs are excluded from per-slot and per-day counts in all future runs today
 - Skip and log reason if any guardrail is breached
 
 **Pending buy cost** = sum of `qty * limit_price` for all open buy orders from `trader orders list --status open`.
@@ -235,12 +239,26 @@ uv run trader orders buy TICKER SHARES --type limit --price PRICE
 # Options
 uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike PRICE --right call|put
 
-# Stop loss
+# Fixed stop loss (use for new entries where stop is at a specific support level)
 uv run trader orders stop TICKER --price PRICE
+
+# Trailing stop (prefer for profitable positions — protects gains without a fixed exit price)
+# Use --trail-percent for volatile stocks (e.g. 3-5%), --trail-amount for stable ones
+uv run trader orders trailing-stop TICKER --trail-percent 2.5
+uv run trader orders trailing-stop TICKER --trail-amount 5.00
+
+# Take profit (limit sell at target)
+uv run trader orders take-profit TICKER --price PRICE
 
 # Trim
 uv run trader orders sell TICKER SHARES --type limit --price PRICE
 ```
+
+**Stop vs Trailing stop guidance:**
+- New position (just entered): use fixed `stop` at a technical level (prior support, -5% to -8%)
+- Position up 10%+: consider converting fixed stop to `trailing-stop` to lock in gains
+- High-conviction hold: use wider trail (5%) to avoid shakeouts
+- Sector rotation / weakening: tighten trail (2-3%) or switch to fixed stop near current price
 
 ### 9. Log run end
 
@@ -256,4 +274,6 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 
 ## Skills Available to Dispatch
 
-`portfolio-manager`, `market-top-detector`, `stanley-druckenmiller-investment`, `sector-analyst`, `technical-analyst`, `market-news-analyst`, `economic-calendar-fetcher`, `geopolitical-influence`, `stock-screener`, `vcp-screener`, `earnings-trade-analyzer`, `options-strategy-advisor`, `position-sizer`, `backtest-expert`, `trader-strategies`
+`portfolio-manager`, `market-top-detector`, `stanley-druckenmiller-investment`, `sector-analyst`, `technical-analyst`, `market-news-analyst`, `economic-calendar-fetcher`, `geopolitical-influence`, `stock-screener`, `vcp-screener`, `earnings-trade-analyzer`, `options-strategy-advisor`, `position-sizer`, `backtest-expert`, `trader-strategies`, `etf-rotation`
+
+**etf-rotation** — Use during `weekly` and `monthly` slots, and whenever the `eu-pre-market` slot shows weak US/EU equity signals. Runs Dual Momentum (GEM) and Ivy Portfolio GTAA across UCITS ETFs (CSPX, IWDA, EQQQ, EMIM, SGLN, AGGH, etc.). Tickers are LSE/XETRA listed — use short form (e.g. `CSPX`, not `CSPX.L`) with all CLI commands; the strategies layer resolves yfinance suffixes automatically.
