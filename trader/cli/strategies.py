@@ -5,6 +5,7 @@ import pandas as pd
 import yfinance as yf
 from trader.strategies.factory import get_strategy, list_strategies
 from trader.strategies.optimizer import Optimizer
+from trader.strategies.options_selector import select_contract
 from trader.strategies.risk_filter import RiskFilter
 from trader.strategies.stop_loss import atr as compute_atr, stop_level as compute_stop
 from trader.news.benzinga import BenzingaClient
@@ -72,17 +73,29 @@ def run_strategy(ctx, ticker, strategy, interval, lookback, params):
 @click.option("--lookback", default="90d", help="History window e.g. 30d, 90d, 1y.")
 @click.option("--with-news", is_flag=True, default=False,
               help="Apply Benzinga sentiment as signal filter. Requires BENZINGA_API_KEY.")
+@click.option("--with-options", is_flag=True, default=False,
+              help="Append options contract recommendation when signal is non-zero. Requires --broker for chain data.")
+@click.option("--expiry", default=None,
+              help="Options expiry YYYY-MM-DD for --with-options (default: ~35 DTE).")
+@click.option("--account-value", type=float, default=None,
+              help="Account value for options position sizing (default: read from broker).")
 @click.option("--params", default=None,
               help='JSON strategy params e.g. \'{"period":14}\'')
 @click.pass_context
-def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
+def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options, expiry, account_value, params):
     """
     Generate trading signals for one or more tickers.
 
-    Returns signal 1 (buy), -1 (sell), 0 (hold) per ticker.
+    Returns signal 1 (buy), -1 (sell/short), 0 (hold) per ticker.
     Includes risk filter metadata (filtered, filter_reason).
 
-    Example: trader strategies signals --tickers AAPL,MSFT --strategy rsi --with-news
+    With --with-options, appends a recommended option contract (strike, expiry,
+    delta, qty) based on the signal direction. Uses ATR for strike selection.
+
+    \b
+    Examples:
+      trader strategies signals --tickers AAPL,MSFT --strategy rsi --with-news
+      trader strategies signals --tickers SPY --strategy pullback --with-options --expiry 2026-04-17
     """
     ticker_list = [t.strip() for t in tickers.replace(",", " ").split()]
     p = json.loads(params) if params else None
@@ -107,6 +120,14 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
 
     sentiments = asyncio.run(get_sentiments())
 
+    # Pre-compute default expiry for options (~35 DTE)
+    if with_options and not expiry:
+        from datetime import datetime, timedelta
+        target = datetime.now() + timedelta(days=35)
+        # Round to next Friday
+        days_to_friday = (4 - target.weekday()) % 7
+        expiry = (target + timedelta(days=days_to_friday)).strftime("%Y-%m-%d")
+
     for ticker in ticker_list:
         try:
             df = _fetch_ohlcv(ticker, interval, lookback)
@@ -127,7 +148,7 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
                 s_mult = round(max(0.0, 1.0 + sentiment.score * min(velocity, 3.0)), 3)  # floor at 0
             else:
                 s_mult = 1.0
-            results.append({
+            row = {
                 "ticker": ticker,
                 "signal": filtered["signal"],
                 "signal_label": {1: "buy", -1: "sell", 0: "hold"}[filtered["signal"]],
@@ -139,11 +160,70 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, params):
                 "sentiment_multiplier": s_mult,
                 "atr": current_atr,
                 "stop_level": sl,
-            })
+            }
+
+            # Options overlay
+            if with_options and filtered["signal"] != 0 and current_atr and entry:
+                try:
+                    chain = _fetch_option_chain(ctx, ticker, expiry)
+                    acct_val = account_value or _fetch_account_value(ctx)
+                    rec = select_contract(
+                        signal=filtered["signal"],
+                        current_price=entry,
+                        current_atr=current_atr,
+                        chain=chain,
+                        account_value=acct_val,
+                    )
+                    row["options"] = {
+                        "action": rec.action,
+                        "strike": rec.contract.strike if rec.contract else None,
+                        "right": rec.contract.right if rec.contract else None,
+                        "expiry": rec.contract.expiry if rec.contract else None,
+                        "delta": rec.contract.delta if rec.contract else None,
+                        "ask": rec.contract.ask if rec.contract else None,
+                        "suggested_qty": rec.suggested_qty,
+                        "max_risk": rec.max_risk,
+                        "rationale": rec.rationale,
+                    }
+                except Exception as e:
+                    row["options"] = {"error": str(e)}
+
+            results.append(row)
         except Exception as e:
             results.append({"ticker": ticker, "error": str(e)})
 
     output_json(results)
+
+
+def _fetch_option_chain(ctx, ticker: str, expiry: str):
+    """Fetch option chain via the broker adapter."""
+    from trader.adapters.factory import get_adapter
+    adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+
+    async def run():
+        await adapter.connect()
+        try:
+            return await adapter.get_option_chain(ticker, expiry)
+        finally:
+            await adapter.disconnect()
+
+    return asyncio.run(run())
+
+
+def _fetch_account_value(ctx) -> float:
+    """Fetch account net liquidation value via the broker adapter."""
+    from trader.adapters.factory import get_adapter
+    adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+
+    async def run():
+        await adapter.connect()
+        try:
+            acct = await adapter.get_account()
+            return acct.net_liquidation
+        finally:
+            await adapter.disconnect()
+
+    return asyncio.run(run())
 
 @strategies.command()
 @click.argument("ticker")
@@ -196,6 +276,12 @@ def optimize(ctx, ticker, strategy, metric):
         "ma_cross": {"fast_window": [10, 20], "slow_window": [40, 50]},
         "bnf": {"lookback": [10, 20], "breakout_pct": [0.01, 0.02]},
         "momentum": {"window": [10, 20, 30], "threshold": [0.02, 0.03, 0.05]},
+        "pullback": {
+            "cross_lookback": [3, 5, 8],
+            "vol_decline_pct": [0.6, 0.7, 0.8],
+            "atr_expansion": [1.3, 1.5, 2.0],
+            "min_factors": [2, 3, 4],
+        },
     }
     strat_cls = get_strategy(strategy).__class__
     opt = Optimizer()
