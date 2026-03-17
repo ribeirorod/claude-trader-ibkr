@@ -27,7 +27,7 @@ class IBKRRestAdapter(Adapter):
     def __init__(self, config: Config):
         self._config = config
         self._client = IBKRRestClient(config)
-        self._account_id = config.ib_account
+        self._account_id = config.active_account
 
     async def connect(self) -> None:
         _RETRIES = 8
@@ -249,6 +249,9 @@ class IBKRRestAdapter(Adapter):
                 price=o.get("price") or None,
                 filled_price=o.get("avgPrice") or None,
                 filled_qty=o.get("filledQuantity"),
+                take_profit=o.get("takeProfitPrice") or None,
+                stop_loss=o.get("stopLossPrice") or None,
+                created_at=o.get("lastExecutionTime") or o.get("lastExecutionTime_r") or None,
             ))
         return result
 

@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import io
 import os
 import traceback
 from datetime import datetime
 from pathlib import Path
 
+import structlog
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
@@ -19,8 +20,9 @@ from telegram.ext import (
 )
 
 from trader.server import agent
+from trader.server.format import split_for_telegram, to_telegram_html
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 TMP_DIR = ROOT / ".trader" / "tmp"
@@ -38,27 +40,7 @@ def _is_authorized(update: Update) -> bool:
     return str(update.effective_chat.id) == allowed
 
 
-async def _send_response(update: Update, text: str) -> None:
-    """Send response, splitting at 4000 chars. Falls back to plain text on parse error."""
-    chunks = agent.split_for_telegram(text)
-    for chunk in chunks:
-        try:
-            await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
-        except Exception:
-            try:
-                await update.message.reply_text(chunk)
-            except Exception as exc:
-                log.error("Failed to send Telegram message: %s", exc)
-
-
-async def _keep_typing(update: Update, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        try:
-            await update.message.chat.send_action(ChatAction.TYPING)
-        except Exception:
-            pass
-        await asyncio.sleep(4)
-
+# ── Media helpers ─────────────────────────────────────────────────────────────
 
 def _transcribe_voice(file_bytes: bytes, filename: str = "voice.ogg") -> str:
     """Sync — runs in thread pool via asyncio.to_thread."""
@@ -74,7 +56,6 @@ def _transcribe_voice(file_bytes: bytes, filename: str = "voice.ogg") -> str:
 
 def _optimise_image(data: bytes, max_dim: int = 1280, quality: int = 82) -> bytes:
     """Sync — runs in thread pool via asyncio.to_thread."""
-    import io
     from PIL import Image
     img = Image.open(io.BytesIO(data)).convert("RGB")
     w, h = img.size
@@ -86,15 +67,41 @@ def _optimise_image(data: bytes, max_dim: int = 1280, quality: int = 82) -> byte
     return buf.getvalue()
 
 
+# ── Send helpers ──────────────────────────────────────────────────────────────
+
+async def _send_response(update: Update, text: str) -> None:
+    """Convert markdown → Telegram HTML, split into conversational chunks, send."""
+    html = to_telegram_html(text)
+    for chunk in split_for_telegram(html):
+        try:
+            await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
+        except Exception:
+            try:
+                await update.message.reply_text(chunk)
+            except Exception as exc:
+                log.error("telegram_send_error", error=str(exc))
+
+
+async def _keep_typing(update: Update, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            await update.message.chat.send_action(ChatAction.TYPING)
+        except Exception:
+            pass
+        await asyncio.sleep(4)
+
+
+# ── Command handlers ──────────────────────────────────────────────────────────
+
 async def _handle_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
     await update.message.reply_text(
-        "*Trader Bot*\n\nAvailable commands:\n"
+        "<b>Trader Bot</b>\n\nAvailable commands:\n"
         "/status — quick positions summary\n"
         "/reset — clear this conversation session\n\n"
-        "Or just send any message to talk to the portfolio agent.",
-        parse_mode=ParseMode.MARKDOWN,
+        "Or just send any message, voice note, image, or file.",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -120,6 +127,8 @@ async def _handle_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     await _send_response(update, response)
 
 
+# ── Message handler ───────────────────────────────────────────────────────────
+
 async def _handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
@@ -127,19 +136,19 @@ async def _handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = str(update.effective_chat.id)
     text = (update.message.text or "").strip()
 
-    # Voice
+    # Voice — transcribe to text
     if update.message.voice and not text:
         try:
             voice_file = await ctx.bot.get_file(update.message.voice.file_id)
             audio_bytes = await voice_file.download_as_bytearray()
             text = await asyncio.to_thread(_transcribe_voice, bytes(audio_bytes))
-            log.info("Voice transcribed: %s", text[:80])
+            log.info("voice_transcribed", preview=text[:80])
         except Exception as exc:
-            log.error("Transcription failed: %s", exc)
+            log.error("voice_transcription_error", error=str(exc))
             await update.message.reply_text(f"Transcription failed: {exc}")
             return
 
-    # Document
+    # Document — save and pass path to agent
     if update.message.document and not text and not update.message.photo:
         doc = update.message.document
         fname = doc.file_name or f"document-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -155,7 +164,7 @@ async def _handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             await update.message.reply_text(f"Could not download document: {exc}")
             return
 
-    # Photo
+    # Photo — optimise and pass path to agent
     if update.message.photo:
         best = max(update.message.photo, key=lambda p: p.file_size or 0)
         caption = (update.message.caption or "").strip()
@@ -182,12 +191,13 @@ async def _handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         await _send_response(update, response)
     except Exception as exc:
         tb = traceback.format_exc()
-        log.error("Agent error: %s\n%s", exc, tb)
+        log.error("agent_error", error=str(exc), traceback=tb.strip().splitlines()[-1])
         short = str(exc)
         if "exit code" in short.lower() or len(short) < 20:
             short = tb.strip().splitlines()[-1]
         await update.message.reply_text(
-            f"Agent error: {short}\n\nCheck `.trader/logs/` for full traceback."
+            f"Agent error: {short}\n\nCheck <code>.trader/logs/</code> for full traceback.",
+            parse_mode=ParseMode.HTML,
         )
     finally:
         stop.set()

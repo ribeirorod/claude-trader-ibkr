@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import shlex
+import time
 from pathlib import Path
 
+import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from trader.server.agent import run_job
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CRONS_PATH = ROOT / ".claude" / "crons.json"
@@ -28,12 +29,22 @@ def is_agent_job(job: dict) -> bool:
 
 
 async def _run_agent_job(job: dict) -> None:
-    await run_job(prompt=job["prompt"], slot=job.get("slot", job["id"]))
+    jid = job["id"]
+    log.info("cron_start", job=jid, type="agent")
+    t0 = time.monotonic()
+    try:
+        await run_job(prompt=job["prompt"], slot=job.get("slot", jid))
+        log.info("cron_done", job=jid, type="agent", elapsed_s=round(time.monotonic() - t0, 1))
+    except Exception as exc:
+        log.error("cron_error", job=jid, type="agent", error=str(exc))
+        raise
 
 
 async def _run_script_job(job: dict) -> None:
+    jid = job["id"]
     cmd = job["cmd"]
-    log.info("scheduler: running script job id=%s cmd=%s", job["id"], cmd)
+    log.info("cron_start", job=jid, type="script", cmd=cmd)
+    t0 = time.monotonic()
     args = shlex.split(cmd)
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -42,15 +53,18 @@ async def _run_script_job(job: dict) -> None:
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
+    elapsed = round(time.monotonic() - t0, 1)
     if proc.returncode != 0:
         log.error(
-            "scheduler: script job failed id=%s rc=%d stderr=%s",
-            job["id"],
-            proc.returncode,
-            stderr.decode(errors="replace")[:500],
+            "cron_error",
+            job=jid,
+            type="script",
+            rc=proc.returncode,
+            elapsed_s=elapsed,
+            stderr=stderr.decode(errors="replace")[:300],
         )
     else:
-        log.info("scheduler: script job done id=%s", job["id"])
+        log.info("cron_done", job=jid, type="script", elapsed_s=elapsed)
 
 
 def build_scheduler(crons_path: Path = DEFAULT_CRONS_PATH) -> AsyncIOScheduler:
@@ -76,6 +90,6 @@ def build_scheduler(crons_path: Path = DEFAULT_CRONS_PATH) -> AsyncIOScheduler:
                 id=job["id"],
                 replace_existing=True,
             )
-        log.info("scheduler: registered %s [%s]", job["id"], job["cron"])
+        log.debug("cron_registered", job=job["id"], cron=job["cron"])
 
     return scheduler

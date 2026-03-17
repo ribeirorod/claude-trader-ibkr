@@ -9,9 +9,13 @@ load_dotenv()
 class Config:
     ib_host: str = field(default_factory=lambda: os.getenv("IB_HOST", "127.0.0.1"))
     ib_port: int = field(default_factory=lambda: int(os.getenv("IB_PORT", "5001")))
+    ibkr_mode: str = field(default_factory=lambda: os.getenv("IBKR_MODE", "paper"))
     ib_account: str = field(default_factory=lambda: os.getenv("IB_ACCOUNT", ""))
     ibkr_username: str = field(default_factory=lambda: os.getenv("IBKR_USERNAME", ""))
     ibkr_password: str = field(default_factory=lambda: os.getenv("IBKR_PASSWORD", ""))
+    ib_account_paper: str = field(default_factory=lambda: os.getenv("IB_ACCOUNT_PAPER", ""))
+    ibkr_username_paper: str = field(default_factory=lambda: os.getenv("IBKR_USERNAME_PAPER", ""))
+    ibkr_password_paper: str = field(default_factory=lambda: os.getenv("IBKR_PASSWORD_PAPER", ""))
     benzinga_api_key: str = field(default_factory=lambda: os.getenv("BENZINGA_API_KEY", ""))
     max_position_pct: float = field(default_factory=lambda: float(os.getenv("MAX_POSITION_PCT", "0.05")))
     default_strategy: str = field(default_factory=lambda: os.getenv("DEFAULT_STRATEGY", "rsi"))
@@ -19,6 +23,15 @@ class Config:
     agent_mode: str = field(default_factory=lambda: os.getenv("AGENT_MODE", "supervised"))
     agent_log_path: str = field(default_factory=lambda: os.getenv("AGENT_LOG_PATH", ".trader/logs/agent.jsonl"))
     agent_profile_path: str = field(default_factory=lambda: os.getenv("AGENT_PROFILE_PATH", ".trader/profile.json"))
+    telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
+    telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
+
+    @property
+    def active_account(self) -> str:
+        """Returns the correct account ID based on IBKR_MODE."""
+        if self.ibkr_mode == "paper":
+            return self.ib_account_paper or self.ib_account
+        return self.ib_account
 
     @property
     def ibkr_rest_base_url(self) -> str:

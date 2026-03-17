@@ -239,12 +239,26 @@ uv run trader orders buy TICKER SHARES --type limit --price PRICE
 # Options
 uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike PRICE --right call|put
 
-# Stop loss
+# Fixed stop loss (use for new entries where stop is at a specific support level)
 uv run trader orders stop TICKER --price PRICE
+
+# Trailing stop (prefer for profitable positions — protects gains without a fixed exit price)
+# Use --trail-percent for volatile stocks (e.g. 3-5%), --trail-amount for stable ones
+uv run trader orders trailing-stop TICKER --trail-percent 2.5
+uv run trader orders trailing-stop TICKER --trail-amount 5.00
+
+# Take profit (limit sell at target)
+uv run trader orders take-profit TICKER --price PRICE
 
 # Trim
 uv run trader orders sell TICKER SHARES --type limit --price PRICE
 ```
+
+**Stop vs Trailing stop guidance:**
+- New position (just entered): use fixed `stop` at a technical level (prior support, -5% to -8%)
+- Position up 10%+: consider converting fixed stop to `trailing-stop` to lock in gains
+- High-conviction hold: use wider trail (5%) to avoid shakeouts
+- Sector rotation / weakening: tighten trail (2-3%) or switch to fixed stop near current price
 
 ### 9. Log run end
 
@@ -260,4 +274,6 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 
 ## Skills Available to Dispatch
 
-`portfolio-manager`, `market-top-detector`, `stanley-druckenmiller-investment`, `sector-analyst`, `technical-analyst`, `market-news-analyst`, `economic-calendar-fetcher`, `geopolitical-influence`, `stock-screener`, `vcp-screener`, `earnings-trade-analyzer`, `options-strategy-advisor`, `position-sizer`, `backtest-expert`, `trader-strategies`
+`portfolio-manager`, `market-top-detector`, `stanley-druckenmiller-investment`, `sector-analyst`, `technical-analyst`, `market-news-analyst`, `economic-calendar-fetcher`, `geopolitical-influence`, `stock-screener`, `vcp-screener`, `earnings-trade-analyzer`, `options-strategy-advisor`, `position-sizer`, `backtest-expert`, `trader-strategies`, `etf-rotation`
+
+**etf-rotation** — Use during `weekly` and `monthly` slots, and whenever the `eu-pre-market` slot shows weak US/EU equity signals. Runs Dual Momentum (GEM) and Ivy Portfolio GTAA across UCITS ETFs (CSPX, IWDA, EQQQ, EMIM, SGLN, AGGH, etc.). Tickers are LSE/XETRA listed — use short form (e.g. `CSPX`, not `CSPX.L`) with all CLI commands; the strategies layer resolves yfinance suffixes automatically.
