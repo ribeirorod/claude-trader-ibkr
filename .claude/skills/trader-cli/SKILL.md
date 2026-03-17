@@ -75,11 +75,14 @@ trader news sentiment AAPL [--lookback 24h|48h|7d]   # returns score -1.0..1.0
 
 ### strategies
 ```bash
-# Strategies: rsi, macd, ma_cross, bnf
+# Strategies: rsi, macd, ma_cross, bnf, momentum, pullback
 trader strategies run     AAPL --strategy rsi [--interval 1d] [--lookback 90d]
 trader strategies signals  --tickers AAPL,MSFT --strategy rsi [--with-news]
 trader strategies backtest AAPL --strategy rsi [--from 2025-01-01]
 trader strategies optimize AAPL --strategy rsi [--metric sharpe|returns|win_rate]
+
+# Pullback strategy with options overlay
+trader strategies signals --tickers SPY --strategy pullback --with-options [--expiry 2026-04-17] [--account-value 50000]
 ```
 
 ## Quick Reference
@@ -96,6 +99,7 @@ trader strategies optimize AAPL --strategy rsi [--metric sharpe|returns|win_rate
 | Protect position | `trader orders stop AAPL --price 185` |
 | Latest news | `trader news latest --tickers AAPL` |
 | Signal check | `trader strategies signals --tickers AAPL --strategy rsi` |
+| Pullback + options | `trader strategies signals --tickers SPY --strategy pullback --with-options` |
 
 ## Gateway Session Management (ibeam)
 
