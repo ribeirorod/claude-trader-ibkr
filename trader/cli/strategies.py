@@ -8,7 +8,7 @@ from trader.strategies.optimizer import Optimizer
 from trader.strategies.options_selector import select_contract
 from trader.strategies.risk_filter import RiskFilter
 from trader.strategies.stop_loss import atr as compute_atr, stop_level as compute_stop
-from trader.news.benzinga import BenzingaClient
+from trader.news.factory import get_news_provider
 from trader.news.sentiment import SentimentScorer
 from trader.cli.__main__ import output_json
 
@@ -72,7 +72,7 @@ def run_strategy(ctx, ticker, strategy, interval, lookback, params):
 @click.option("--interval", default="1d", help="Bar interval: 1m, 5m, 1h, 1d.")
 @click.option("--lookback", default="90d", help="History window e.g. 30d, 90d, 1y.")
 @click.option("--with-news", is_flag=True, default=False,
-              help="Apply Benzinga sentiment as signal filter. Requires BENZINGA_API_KEY.")
+              help="Apply news sentiment as signal filter. Requires at least one news API key.")
 @click.option("--with-options", is_flag=True, default=False,
               help="Append options contract recommendation when signal is non-zero. Requires --broker for chain data.")
 @click.option("--expiry", default=None,
@@ -111,12 +111,12 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options,
     async def get_sentiments():
         if not with_news:
             return {}
-        client = BenzingaClient(ctx.obj["config"])
+        provider = get_news_provider(ctx.obj["config"])
         scorer = SentimentScorer()
         try:
-            items = await client.get_news(ticker_list, limit=20)
+            items = await provider.get_news(ticker_list, limit=20)
         finally:
-            await client.aclose()
+            await provider.aclose()
         sents = {}
         for ticker in ticker_list:
             ticker_items = [i for i in items if i.ticker == ticker]

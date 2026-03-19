@@ -17,6 +17,8 @@ class Config:
     ibkr_username_paper: str = field(default_factory=lambda: os.getenv("IBKR_USERNAME_PAPER", ""))
     ibkr_password_paper: str = field(default_factory=lambda: os.getenv("IBKR_PASSWORD_PAPER", ""))
     benzinga_api_key: str = field(default_factory=lambda: os.getenv("BENZINGA_API_KEY", ""))
+    marketaux_api_key: str = field(default_factory=lambda: os.getenv("MARKETAUX_API_KEY", ""))
+    massive_api_key: str = field(default_factory=lambda: os.getenv("MASSIVE_API_KEY", ""))
     max_position_pct: float = field(default_factory=lambda: float(os.getenv("MAX_POSITION_PCT", "0.05")))
     default_strategy: str = field(default_factory=lambda: os.getenv("DEFAULT_STRATEGY", "rsi"))
     default_broker: str = field(default_factory=lambda: os.getenv("DEFAULT_BROKER", "ibkr-rest"))
