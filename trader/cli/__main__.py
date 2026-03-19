@@ -127,5 +127,8 @@ cli.add_command(scan.scan)
 cli.add_command(watchlist.watchlist)
 cli.add_command(report.report)
 
+from trader.cli.universe import universe
+cli.add_command(universe)
+
 if __name__ == "__main__":
     cli()
