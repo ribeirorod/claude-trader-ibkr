@@ -15,7 +15,7 @@ def _parse_lookback(s: str) -> int:
 
 @click.group()
 def news():
-    """News and sentiment analysis (Marketaux → Benzinga → Massive)."""
+    """News and sentiment analysis (Marketaux → Benzinga)."""
 
 @news.command()
 @click.option("--tickers", required=True,
