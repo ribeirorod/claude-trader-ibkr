@@ -10,7 +10,7 @@ class MassiveProvider(NewsProvider):
     Massive financial data API — https://massive.com/docs/rest/stocks/news
     Paid tier. Stub implementation — activate by setting MASSIVE_API_KEY.
     """
-    _BASE = "https://api.massive.com/rest/stocks/news"
+    _BASE = "https://api.massive.com/v2/reference/news"
 
     def __init__(self, api_key: str) -> None:
         self._key = api_key
@@ -33,7 +33,7 @@ class MassiveProvider(NewsProvider):
 
             for article in r.json().get("results", []):
                 items.append(NewsItem(
-                    id=article.get("request_id", ""),
+                    id=article.get("id", ""),
                     ticker=ticker,
                     headline=article.get("title", ""),
                     summary=article.get("description", ""),
