@@ -49,12 +49,19 @@ def test_universe_show_existing(runner, fake_universe_path):
     assert data["last_refreshed_us"] == "2026-03-19T10:00:00Z"
 
 
+def _make_async_adapter():
+    adapter = MagicMock()
+    adapter.connect = AsyncMock()
+    adapter.disconnect = AsyncMock()
+    return adapter
+
+
 def test_universe_refresh_writes_file(runner, fake_universe_path):
     """universe refresh --market us writes scan results to universe.json."""
     mock_scan_result = [MagicMock(symbol="NVDA"), MagicMock(symbol="AVGO")]
 
     with patch("trader.cli.universe._run_scan", new_callable=AsyncMock, return_value=mock_scan_result), \
-         patch("trader.cli.universe.get_adapter"):
+         patch("trader.cli.universe.get_adapter", return_value=_make_async_adapter()):
         result = runner.invoke(cli, ["universe", "refresh", "--market", "us"],
                                obj={"broker": "ibkr-rest", "config": MagicMock()})
 
@@ -81,7 +88,7 @@ def test_universe_refresh_eu_preserves_us_segment(runner, fake_universe_path):
 
     mock_scan_result = [MagicMock(symbol="ASML")]
     with patch("trader.cli.universe._run_scan", new_callable=AsyncMock, return_value=mock_scan_result), \
-         patch("trader.cli.universe.get_adapter"):
+         patch("trader.cli.universe.get_adapter", return_value=_make_async_adapter()):
         result = runner.invoke(cli, ["universe", "refresh", "--market", "eu"],
                                obj={"broker": "ibkr-rest", "config": MagicMock()})
 

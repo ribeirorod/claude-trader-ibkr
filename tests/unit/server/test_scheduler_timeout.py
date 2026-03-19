@@ -41,24 +41,20 @@ async def test_agent_job_completes_within_timeout():
 
 @pytest.mark.asyncio
 async def test_agent_job_uses_default_timeout_when_not_specified():
-    """_run_agent_job with no timeout_minutes uses _DEFAULT_AGENT_TIMEOUT_MINUTES."""
+    """_run_agent_job with no timeout_minutes runs to completion and uses default constant."""
     from trader.server import scheduler as sched_module
     from trader.server.scheduler import _run_agent_job
 
     job = {"id": "test-default", "prompt": "task", "slot": "test"}
-    captured = {}
 
-    async def record_timeout(*args, timeout, **kwargs):
-        captured["timeout"] = timeout
+    fast_run = AsyncMock()
+    with patch("trader.server.scheduler.run_job", fast_run), \
+         patch("trader.server.scheduler._log_timeout_error") as mock_log:
+        await _run_agent_job(job)
 
-    with patch("asyncio.wait_for", side_effect=record_timeout):
-        with patch("trader.server.scheduler.run_job", new_callable=AsyncMock):
-            try:
-                await _run_agent_job(job)
-            except TypeError:
-                pass  # record_timeout returns None, not a coroutine — expected
-
-    assert captured.get("timeout") == sched_module._DEFAULT_AGENT_TIMEOUT_MINUTES * 60
+    fast_run.assert_awaited_once()
+    mock_log.assert_not_called()
+    assert sched_module._DEFAULT_AGENT_TIMEOUT_MINUTES == 15.0
 
 
 @pytest.mark.asyncio

@@ -83,17 +83,11 @@ def _save(data: dict) -> None:
 
 async def _run_scan(adapter, scan_type: str, market: str,
                     filters: list[dict], limit: int) -> list:
-    """Run one IBKR scanner. Returns [] on any error (gateway offline etc.)."""
+    """Run one IBKR scanner. Caller owns adapter connect/disconnect lifecycle."""
     try:
-        await adapter.connect()
         return await adapter.scan(scan_type, market, filters or None, limit)
     except Exception:
         return []
-    finally:
-        try:
-            await adapter.disconnect()
-        except Exception:
-            pass
 
 
 @click.group()
@@ -138,33 +132,43 @@ def refresh(ctx, market):
     data = _load()
 
     async def run_all() -> dict[str, int]:
-        now = datetime.now(timezone.utc).isoformat()
-        counts: dict[str, int] = {}
-        for seg in segments:
-            tickers_seen: dict[str, dict] = {}
-            for cfg in _SCAN_CONFIGS[seg]:
-                results = await _run_scan(adapter, cfg["scan"], cfg["market"],
-                                          cfg["filters"], cfg["limit"])
-                score = _SCAN_SCORES.get(cfg["scan"], 40)
-                exchange = cfg["market"].split(".")[-1]
-                for r in results:
-                    t = r.symbol
-                    if t not in tickers_seen:
-                        tickers_seen[t] = {
-                            "ticker": t, "exchange": exchange,
-                            "asset_class": _ASSET_CLASS[seg],
-                            "sources": [], "score": score,
-                        }
-                    else:
-                        tickers_seen[t]["score"] = max(tickers_seen[t]["score"], score)
-                    if cfg["scan"] not in tickers_seen[t]["sources"]:
-                        tickers_seen[t]["sources"].append(cfg["scan"])
-            segment_list = sorted(tickers_seen.values(), key=lambda x: -x["score"])
-            data[_SEGMENT_DATA_KEY[seg]] = segment_list
-            data[_SEGMENT_TS_KEY[seg]] = now
-            counts[seg] = len(segment_list)
-        _save(data)
-        return counts
+        # Single connect/disconnect for all scans — matches watchlist.py pattern.
+        # _run_scan must NOT manage adapter lifecycle; a closed httpx client
+        # cannot be reopened and would silently return [] on every subsequent scan.
+        await adapter.connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            counts: dict[str, int] = {}
+            for seg in segments:
+                tickers_seen: dict[str, dict] = {}
+                for cfg in _SCAN_CONFIGS[seg]:
+                    results = await _run_scan(adapter, cfg["scan"], cfg["market"],
+                                              cfg["filters"], cfg["limit"])
+                    score = _SCAN_SCORES.get(cfg["scan"], 40)
+                    exchange = cfg["market"].split(".")[-1]
+                    for r in results:
+                        t = r.symbol
+                        if t not in tickers_seen:
+                            tickers_seen[t] = {
+                                "ticker": t, "exchange": exchange,
+                                "asset_class": _ASSET_CLASS[seg],
+                                "sources": [], "score": score,
+                            }
+                        else:
+                            tickers_seen[t]["score"] = max(tickers_seen[t]["score"], score)
+                        if cfg["scan"] not in tickers_seen[t]["sources"]:
+                            tickers_seen[t]["sources"].append(cfg["scan"])
+                segment_list = sorted(tickers_seen.values(), key=lambda x: -x["score"])
+                data[_SEGMENT_DATA_KEY[seg]] = segment_list
+                data[_SEGMENT_TS_KEY[seg]] = now
+                counts[seg] = len(segment_list)
+            _save(data)
+            return counts
+        finally:
+            try:
+                await adapter.disconnect()
+            except Exception:
+                pass
 
     counts = asyncio.run(run_all())
     output_json({"refreshed": counts, "universe_path": str(_universe_path()), **data})
