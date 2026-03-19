@@ -89,111 +89,33 @@ Determine: risk-on or risk-off? If risk-off and no clear hedge → return `[]` e
 
 ---
 
-### Step 2 — Universe cache check
+### Step 2 — Refresh universe cache (if stale)
 
-Read `.trader/universe.json`. Determine which segments need refreshing based on staleness rules above.
-
-- **If both fresh** → skip to Step 3 immediately. Log:
-  ```bash
-  echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","agent":"opportunity-finder","event":"UNIVERSE_CACHE_HIT","eu_age_h":X,"us_age_h":Y}' >> .trader/logs/agent.jsonl
-  ```
-
-- **If EU stale** → run Step 2a (EU refresh)
-- **If US stale** → run Step 2b (US refresh)
-
----
-
-### Step 2a — Refresh EU universe (when stale)
-
-Run IBKR scans across EU exchanges:
+Check current staleness:
 ```bash
-uv run trader scan run HIGH_VS_52W_HL --market STK.EU.LSE --ema200-above --limit 25
-uv run trader scan run HIGH_VS_52W_HL --market STK.EU.IBIS --ema200-above --limit 25
-uv run trader scan run HIGH_VS_52W_HL --market STK.EU.SBF --ema200-above --limit 25
-uv run trader scan run TOP_PERC_GAIN --market STK.EU.LSE --price-above 5 --avg-volume-above 100000 --limit 25
-uv run trader scan run TOP_PERC_GAIN --market STK.EU.IBIS --price-above 5 --avg-volume-above 100000 --limit 25
-uv run trader scan run MOST_ACTIVE --market STK.EU.LSE --ema200-above --limit 25
+cat .trader/universe.json 2>/dev/null || echo '{"last_refreshed_eu":null,"last_refreshed_us":null,"eu":[],"us":[],"etf":[],"options_candidates":[]}'
 ```
 
-Merge results. Score each ticker:
-- Appears in 3+ scans: 100
-- Appears in 2 scans: 70
-- Appears in 1 scan: 40
-- On any watchlist: +15
+**Refresh rules:**
+- `eu` segment: stale if `last_refreshed_eu` is null OR older than 20h OR `time_slot` is `eu-pre-market`
+- `us` + `etf` + `options_candidates`: stale if `last_refreshed_us` is null OR older than 20h OR `time_slot` is `eu-us-overlap`
+- `force_refresh: true` in input context → refresh all segments
 
-Write updated EU section to cache:
+Run the appropriate refresh:
 ```bash
-python3 -c "
-import json, datetime
-from pathlib import Path
-cache_path = Path('.trader/universe.json')
-cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
-cache['last_refreshed_eu'] = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-cache['eu'] = EU_TICKERS_LIST  # replace with actual list
-cache_path.write_text(json.dumps(cache, indent=2))
-"
+# EU slot or eu segment stale:
+uv run trader universe refresh --market eu
+
+# US/overlap slot or us segment stale:
+uv run trader universe refresh --market us
+
+# force_refresh or bootstrap:
+uv run trader universe refresh --market all
 ```
 
-Log:
+Then re-read the updated cache:
 ```bash
-echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","agent":"opportunity-finder","event":"UNIVERSE_REFRESHED","market":"eu","tickers_found":N}' >> .trader/logs/agent.jsonl
-```
-
----
-
-### Step 2b — Refresh US stocks + ETFs + options candidates (when stale)
-
-**US stocks — IBKR scans:**
-```bash
-uv run trader scan run HIGH_VS_52W_HL --market STK.US.MAJOR --ema200-above --avg-volume-above 500000 --price-above 10 --limit 30
-uv run trader scan run TOP_PERC_GAIN --market STK.US.MAJOR --ema200-above --avg-volume-above 500000 --price-above 10 --limit 30
-uv run trader scan run MOST_ACTIVE --market STK.US.MAJOR --ema200-above --price-above 10 --limit 30
-```
-
-**US stocks — Finviz** (mid+ cap, positive EPS growth, above 200 SMA, RSI > 50, sorted by volume):
-```
-WebFetch: https://finviz.com/screener.ashx?v=111&f=cap_midover,fa_epsqoq_pos,sh_avgvol_o500,sh_price_o10,ta_sma200_pa,ta_rsi_os50&ft=4&o=-volume
-```
-Parse ticker symbols from the HTML results table. If unreachable, skip — IBKR scans are sufficient.
-
-**ETFs — IBKR scans (both US and EU UCITS):**
-```bash
-# US ETFs (note: NOT directly tradeable from EU account — but useful for signal reading)
-uv run trader scan run MOST_ACTIVE --market ETF.EQ.US.MAJOR --limit 20
-uv run trader scan run HIGH_VS_52W_HL --market ETF.EQ.US.MAJOR --limit 20
-# EU UCITS ETFs via LSE (these ARE tradeable from EU account)
-uv run trader scan run MOST_ACTIVE --market STK.EU.LSE --price-above 5 --limit 30
-uv run trader scan run HIGH_VS_52W_HL --market STK.EU.LSE --price-above 5 --limit 30
-```
-From LSE results, identify known UCITS ETF tickers (CSPX, VUSA, IWDA, SWDA, EQQQ, SGLN, PHAU, XLES, IEUX, etc.) and tag them as `asset_class: etf`. Store in `etf` cache segment.
-
-US ETFs (SPY, QQQ, etc.) are stored for **signal reading only** — flag them `tradeable: false` since they can't be ordered from this EU account.
-
-**Options candidates — IV and flow scans:**
-```bash
-# High implied volatility — elevated premium, good for selling strategies
-uv run trader scan run HIGH_OPT_IMP_VOLAT --market STK.US.MAJOR --limit 20
-# Biggest IV% gainers — volatility spike, possible event-driven play
-uv run trader scan run TOP_OPT_IMP_VOLAT_GAIN --market STK.US.MAJOR --limit 20
-# Most active options — unusual volume = informed flow
-uv run trader scan run OPT_VOLUME_MOST_ACTIVE --market STK.US.MAJOR --limit 20
-# Bullish options flow (low put/call ratio)
-uv run trader scan run LOW_OPT_VOLUME_PUT_CALL_RATIO --market STK.US.MAJOR --limit 20
-```
-Tickers appearing in 2+ options scans are strong candidates. Store in `options_candidates` cache segment with IV rank and put/call ratio noted.
-
-**Watchlist tickers — read all named lists and inject into universe:**
-```bash
-uv run trader watchlist list
-```
-
-For each ticker found across all watchlists: add it to the appropriate universe segment (eu/us/etf/options_candidates) and apply the +15 score bonus. This ensures previously discovered candidates stay in the pipeline without requiring a full re-scan.
-
-Merge and score all sources. Write updated `us`, `etf`, `options_candidates` sections and `last_refreshed_us`, `last_refreshed_etf`, `last_refreshed_options` timestamps to cache.
-
-Log:
-```bash
-echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","agent":"opportunity-finder","event":"UNIVERSE_REFRESHED","market":"us+etf+options","us_found":N,"etf_found":M,"options_found":P}' >> .trader/logs/agent.jsonl
+cat .trader/universe.json
 ```
 
 ---

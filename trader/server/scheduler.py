@@ -28,13 +28,30 @@ def is_agent_job(job: dict) -> bool:
     return job.get("agent", "system") != "system"
 
 
+# Default timeouts — override per-job via "timeout_minutes" in crons.json
+_DEFAULT_AGENT_TIMEOUT_MINUTES: float = 15.0
+_DEFAULT_SCRIPT_TIMEOUT_MINUTES: float = 5.0
+
+
+def _log_timeout_error(job_id: str, timeout_minutes: float) -> None:
+    """Centralised timeout logging — also called from tests."""
+    log.error("cron_timeout", job=job_id, timeout_minutes=timeout_minutes)
+
+
 async def _run_agent_job(job: dict) -> None:
     jid = job["id"]
-    log.info("cron_start", job=jid, type="agent")
+    timeout_min = float(job.get("timeout_minutes", _DEFAULT_AGENT_TIMEOUT_MINUTES))
+    log.info("cron_start", job=jid, type="agent", timeout_minutes=timeout_min)
     t0 = time.monotonic()
     try:
-        await run_job(prompt=job["prompt"], slot=job.get("slot", jid))
-        log.info("cron_done", job=jid, type="agent", elapsed_s=round(time.monotonic() - t0, 1))
+        await asyncio.wait_for(
+            run_job(prompt=job["prompt"], slot=job.get("slot", jid)),
+            timeout=timeout_min * 60,
+        )
+        log.info("cron_done", job=jid, type="agent",
+                 elapsed_s=round(time.monotonic() - t0, 1))
+    except asyncio.TimeoutError:
+        _log_timeout_error(jid, timeout_min)
     except Exception as exc:
         log.error("cron_error", job=jid, type="agent", error=str(exc))
         raise
@@ -43,7 +60,8 @@ async def _run_agent_job(job: dict) -> None:
 async def _run_script_job(job: dict) -> None:
     jid = job["id"]
     cmd = job["cmd"]
-    log.info("cron_start", job=jid, type="script", cmd=cmd)
+    timeout_min = float(job.get("timeout_minutes", _DEFAULT_SCRIPT_TIMEOUT_MINUTES))
+    log.info("cron_start", job=jid, type="script", cmd=cmd, timeout_minutes=timeout_min)
     t0 = time.monotonic()
     args = shlex.split(cmd)
     proc = await asyncio.create_subprocess_exec(
@@ -52,17 +70,20 @@ async def _run_script_job(job: dict) -> None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout_min * 60
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        _log_timeout_error(jid, timeout_min)
+        return
+
     elapsed = round(time.monotonic() - t0, 1)
     if proc.returncode != 0:
-        log.error(
-            "cron_error",
-            job=jid,
-            type="script",
-            rc=proc.returncode,
-            elapsed_s=elapsed,
-            stderr=stderr.decode(errors="replace")[:300],
-        )
+        log.error("cron_error", job=jid, type="script", rc=proc.returncode,
+                  elapsed_s=elapsed, stderr=stderr.decode(errors="replace")[:300])
     else:
         log.info("cron_done", job=jid, type="script", elapsed_s=elapsed)
 
