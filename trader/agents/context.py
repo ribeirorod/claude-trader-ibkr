@@ -28,16 +28,21 @@ def build_context(
     recent_log: list[dict],
     profile_path: Path = DEFAULT_PROFILE_PATH,
     regime: str | None = None,
+    cfg=None,
 ) -> dict[str, Any]:
+    from trader.config import Config  # local import to avoid circular at module level
+    if cfg is None:
+        cfg = Config()
+
     profile = load_profile(profile_path)
     targets = profile.get("portfolio_targets", {})
 
     # Regime-aware cash floor: override target_cash_reserve_pct when defensive
     base_cash_floor = targets.get("target_cash_reserve_pct", 10) / 100
     if regime == "bear":
-        effective_cash_floor = max(base_cash_floor, 0.40)
+        effective_cash_floor = max(base_cash_floor, cfg.bear_cash_floor)
     elif regime == "caution":
-        effective_cash_floor = max(base_cash_floor, 0.25)
+        effective_cash_floor = max(base_cash_floor, cfg.caution_cash_floor)
     else:
         effective_cash_floor = base_cash_floor
 
