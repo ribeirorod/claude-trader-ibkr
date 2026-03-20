@@ -85,7 +85,8 @@ def _fmt_signal_row(r: dict) -> str:
     sent = r.get("sentiment_score")  # field name matches CLI JSON output exactly
     sent_str = f"  sentiment {sent:+.2f}" if sent is not None else ""
     filtered = r.get("filtered", False)
-    filter_str = f"  [{r.get('filter_reason', '')}]" if filtered else ""
+    filter_reason_safe = r.get("filter_reason", "").replace("_", "\\_")
+    filter_str = f"  [{filter_reason_safe}]" if filtered else ""
     return f"{label:<4} {ticker:<7} {strategy} {arrow}{sent_str}{filter_str}"
 
 
@@ -107,6 +108,11 @@ def _build_message(watchlists: dict[str, list[str]]) -> str | None:
             continue
         results = _run_signals(tickers)
         if not results:
+            log.warning(
+                "signals_empty list=%s tickers=%s — subprocess returned no results",
+                list_name,
+                tickers,
+            )
             continue
         any_content = True
 
