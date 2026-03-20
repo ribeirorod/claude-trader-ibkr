@@ -153,3 +153,55 @@ def test_buy_suppressed_when_position_limit_reached():
     )
     assert result["signal"] == 0
     assert result["filter_reason"] == "position_limit"
+
+
+def test_buy_blocked_in_bear_regime():
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1,
+        quote=make_quote(),
+        position=None,
+        sentiment=None,
+        regime="bear",
+    )
+    assert result["signal"] == 0
+    assert result["filtered"] is True
+    assert result["filter_reason"] == "bear_regime"
+
+
+def test_buy_passes_in_bull_regime():
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1,
+        quote=make_quote(),
+        position=None,
+        sentiment=None,
+        regime="bull",
+    )
+    assert result["signal"] == 1
+    assert result["filtered"] is False
+
+
+def test_sell_not_blocked_in_bear_regime():
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=-1,
+        quote=make_quote(),
+        position=None,
+        sentiment=None,
+        regime="bear",
+    )
+    assert result["signal"] == -1
+    assert result["filtered"] is False
+
+
+def test_buy_passes_when_regime_is_none():
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1,
+        quote=make_quote(),
+        position=None,
+        sentiment=None,
+        regime=None,
+    )
+    assert result["signal"] == 1
