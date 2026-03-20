@@ -130,5 +130,8 @@ cli.add_command(report.report)
 from trader.cli.universe import universe
 cli.add_command(universe)
 
+from trader.cli.market import market
+cli.add_command(market)
+
 if __name__ == "__main__":
     cli()
