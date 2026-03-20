@@ -3,10 +3,8 @@ import json
 from pathlib import Path
 
 import click
-import pandas as pd
-import yfinance as yf
 
-from trader.market.regime import detect_regime, MarketRegime, _FAST_WINDOW, _SLOW_WINDOW
+from trader.market.regime import detect_regime, MarketRegime, _default_fetch, _ma_state
 from trader.market.rotation import build_rotation_actions
 from trader.cli.__main__ import output_json
 
@@ -35,15 +33,8 @@ def regime(tickers: str):
 
     states: dict[str, int] = {}
     for ticker in ticker_list:
-        raw = yf.download(ticker, period="200d", progress=False, auto_adjust=True)
-        if isinstance(raw.columns, pd.MultiIndex):
-            raw.columns = [c[0].lower() for c in raw.columns]
-        else:
-            raw.columns = [c.lower() for c in raw.columns]
-        close = raw["close"]
-        fast = close.rolling(_FAST_WINDOW).mean().iloc[-1]
-        slow = close.rolling(_SLOW_WINDOW).mean().iloc[-1]
-        states[ticker] = 1 if fast > slow else (-1 if fast < slow else 0)
+        ohlcv = _default_fetch(ticker, "200d", False)
+        states[ticker] = _ma_state(ohlcv)
 
     if all(s == 1 for s in states.values()):
         reg = MarketRegime.BULL
