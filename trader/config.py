@@ -20,6 +20,15 @@ class Config:
     marketaux_api_key: str = field(default_factory=lambda: os.getenv("MARKETAUX_API_KEY", ""))
     massive_api_key: str = field(default_factory=lambda: os.getenv("MASSIVE_API_KEY", ""))
     max_position_pct: float = field(default_factory=lambda: float(os.getenv("MAX_POSITION_PCT", "0.05")))
+    regime_tickers: list = field(
+        default_factory=lambda: os.getenv("REGIME_TICKERS", "SPY,QQQ").split(",")
+    )
+    bear_cash_floor: float = field(
+        default_factory=lambda: float(os.getenv("BEAR_CASH_FLOOR", "0.40"))
+    )
+    caution_cash_floor: float = field(
+        default_factory=lambda: float(os.getenv("CAUTION_CASH_FLOOR", "0.25"))
+    )
     default_strategy: str = field(default_factory=lambda: os.getenv("DEFAULT_STRATEGY", "rsi"))
     default_broker: str = field(default_factory=lambda: os.getenv("DEFAULT_BROKER", "ibkr-rest"))
     agent_mode: str = field(default_factory=lambda: os.getenv("AGENT_MODE", "supervised"))

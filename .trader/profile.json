@@ -46,5 +46,14 @@
     ],
     "max_options_portfolio_pct": 20
   },
-  "notes": "Free-form field. Update as your thesis evolves — agents read this on every run."
+  "notes": "Free-form field. Update as your thesis evolves — agents read this on every run.",
+  "bear_market": {
+    "inverse_etf_basket": [
+      {"ticker": "SH",  "description": "1x inverse S&P 500 — moderate hedge"},
+      {"ticker": "PSQ", "description": "1x inverse Nasdaq — tech hedge"}
+    ],
+    "defensive_sectors": ["GLD", "XLU", "XLP", "TLT"],
+    "max_inverse_pct": 0.20,
+    "note": "Inverse ETFs and defensive sectors to rotate into during confirmed bear regime. Avoid leveraged inverse ETFs (SQQQ, SPXU) unless regime is high-conviction and confirmed by multiple signals."
+  }
 }
