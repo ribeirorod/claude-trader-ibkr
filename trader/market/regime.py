@@ -17,7 +17,10 @@ _SLOW_WINDOW = 50
 
 def _default_fetch(ticker: str, period: str, progress: bool) -> pd.DataFrame:
     raw = yf.download(ticker, period=period, progress=progress, auto_adjust=True)
-    raw.columns = [c.lower() for c in raw.columns]
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = [c[0].lower() for c in raw.columns]
+    else:
+        raw.columns = [c.lower() for c in raw.columns]
     return raw
 
 
@@ -26,6 +29,10 @@ def _ma_state(ohlcv: pd.DataFrame) -> int:
     close = ohlcv["close"]
     fast = close.rolling(_FAST_WINDOW).mean().iloc[-1]
     slow = close.rolling(_SLOW_WINDOW).mean().iloc[-1]
+    if pd.isna(fast) or pd.isna(slow):
+        raise ValueError(
+            f"Not enough data for MA windows ({len(ohlcv)} rows, need {_SLOW_WINDOW})"
+        )
     if fast > slow:
         return 1
     if fast < slow:
