@@ -71,3 +71,18 @@ def test_position_size_larger_account_more_shares():
     s1 = position_size(df, entry, account_value=50_000, risk_pct=0.01, atr_multiplier=2.0)
     s2 = position_size(df, entry, account_value=200_000, risk_pct=0.01, atr_multiplier=2.0)
     assert s2 > s1
+
+
+from trader.strategies.stop_loss import regime_atr_multiplier
+
+def test_bull_multiplier_is_2():
+    assert regime_atr_multiplier("bull") == 2.0
+
+def test_caution_multiplier_is_1_5():
+    assert regime_atr_multiplier("caution") == 1.5
+
+def test_bear_multiplier_is_1():
+    assert regime_atr_multiplier("bear") == 1.0
+
+def test_unknown_regime_defaults_to_bull():
+    assert regime_atr_multiplier("unknown") == 2.0

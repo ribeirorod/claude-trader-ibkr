@@ -40,3 +40,19 @@ def position_size(
     shares = int(dollar_risk / risk_per_share)
     max_shares = int(account_value / entry_price) if entry_price > 0 else shares
     return max(1, min(shares, max_shares))
+
+
+_REGIME_MULTIPLIERS: dict[str, float] = {
+    "bull":    2.0,
+    "caution": 1.5,
+    "bear":    1.0,
+}
+
+def regime_atr_multiplier(regime: str) -> float:
+    """Return the ATR stop-loss multiplier for the given market regime.
+
+    bull → 2.0 (wide stops, full trend-following)
+    caution → 1.5 (moderate tightening)
+    bear → 1.0 (tight stops, capital preservation)
+    """
+    return _REGIME_MULTIPLIERS.get(regime, 2.0)
