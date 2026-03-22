@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 def _make_update(chat_id: str, text: str = "hello") -> MagicMock:
     update = MagicMock()
     update.effective_chat.id = int(chat_id)
+    update.effective_user.id = int(chat_id)
+    update.effective_user.username = None
     update.message.text = text
     update.message.voice = None
     update.message.document = None

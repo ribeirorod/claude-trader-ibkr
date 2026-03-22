@@ -19,7 +19,7 @@ from telegram.ext import (
     filters,
 )
 
-from trader.server import agent
+from trader.server import agent, users
 from trader.server.format import split_for_telegram, to_telegram_html
 
 log = structlog.get_logger(__name__)
@@ -29,15 +29,12 @@ TMP_DIR = ROOT / ".trader" / "tmp"
 GROQ_WHISPER_MODEL = "whisper-large-v3-turbo"
 
 
-def _authorized_chat_id() -> str:
-    return os.getenv("TELEGRAM_CHAT_ID", "")
-
-
 def _is_authorized(update: Update) -> bool:
-    allowed = _authorized_chat_id()
-    if not allowed:
-        return False
-    return str(update.effective_chat.id) == allowed
+    return users.is_authorized(update.effective_user.id)
+
+
+def _is_owner(update: Update) -> bool:
+    return users.is_owner(update.effective_user.id)
 
 
 # ── Media helpers ─────────────────────────────────────────────────────────────
@@ -96,10 +93,12 @@ async def _keep_typing(update: Update, stop: asyncio.Event) -> None:
 async def _handle_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
+    is_own = _is_owner(update)
+    admin = "\n/users — list authorized users\n/adduser &lt;id&gt; — grant access\n/removeuser &lt;id&gt; — revoke access" if is_own else ""
     await update.message.reply_text(
         "<b>Trader Bot</b>\n\nAvailable commands:\n"
         "/status — quick positions summary\n"
-        "/reset — clear this conversation session\n\n"
+        f"/reset — clear this conversation session{admin}\n\n"
         "Or just send any message, voice note, image, or file.",
         parse_mode=ParseMode.HTML,
     )
@@ -109,6 +108,65 @@ async def _handle_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
     await update.message.reply_text("Session cleared. Starting fresh.")
+
+
+async def _handle_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_owner(update):
+        return
+    all_users = users.list_all()
+    if not all_users:
+        await update.message.reply_text("No authorized users.")
+        return
+    lines = []
+    for u in all_users:
+        tag = f"@{u['username']}" if u.get("username") else f"id:{u['id']}"
+        label = f"  <i>{u['label']}</i>" if u.get("label") else ""
+        lines.append(f"• <code>{u['id']}</code> {tag}{label}")
+    await update.message.reply_text(
+        f"<b>Authorized users ({len(all_users)})</b>\n\n" + "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _handle_adduser(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /adduser <user_id> [label]"""
+    if not _is_owner(update):
+        return
+    args = ctx.args or []
+    if not args:
+        await update.message.reply_text("Usage: /adduser <user_id> [label]")
+        return
+    try:
+        user_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number. Ask the user to send /start so you can see their ID in the logs.")
+        return
+    label = " ".join(args[1:])
+    added = users.add(user_id, label=label)
+    if added:
+        await update.message.reply_text(f"User <code>{user_id}</code> added.", parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(f"User <code>{user_id}</code> is already authorized.", parse_mode=ParseMode.HTML)
+
+
+async def _handle_removeuser(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /removeuser <user_id>"""
+    if not _is_owner(update):
+        return
+    args = ctx.args or []
+    if not args:
+        await update.message.reply_text("Usage: /removeuser <user_id>")
+        return
+    try:
+        user_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("user_id must be a number.")
+        return
+    removed = users.remove(user_id)
+    if removed:
+        await update.message.reply_text(f"User <code>{user_id}</code> removed.", parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(f"User <code>{user_id}</code> not found (or is the owner).", parse_mode=ParseMode.HTML)
 
 
 async def _handle_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -131,6 +189,8 @@ async def _handle_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
 async def _handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
+        u = update.effective_user
+        log.warning("unauthorized_message", user_id=u.id, username=u.username)
         return
 
     chat_id = str(update.effective_chat.id)
@@ -214,5 +274,8 @@ def build_telegram_app() -> Application:
     app.add_handler(CommandHandler("start", _handle_start))
     app.add_handler(CommandHandler("reset", _handle_reset))
     app.add_handler(CommandHandler("status", _handle_status))
+    app.add_handler(CommandHandler("users", _handle_users))
+    app.add_handler(CommandHandler("adduser", _handle_adduser))
+    app.add_handler(CommandHandler("removeuser", _handle_removeuser))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _handle_message))
     return app
