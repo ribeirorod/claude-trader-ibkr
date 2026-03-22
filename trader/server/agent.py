@@ -54,6 +54,17 @@ Watchlists (stored in outputs/watchlists.json):
   uv run trader watchlist show [name] [--signals]
   uv run trader watchlist from-scan SCAN_TYPE [--list name] [--ema200-above] [--mktcap-above N]
 
+Named watchlists — use these exact names:
+  --list default        IBKR watchlist (scanned for signals automatically)
+  --list tr-portfolio   Trade Republic holdings (monitor-only, no orders)
+  --list tr-watchlist   Trade Republic watchlist (monitor-only, no orders)
+
+Examples for natural language → CLI mapping:
+  "add ASML to TR portfolio"     → trader watchlist add ASML --list tr-portfolio
+  "remove NVDA from TR watchlist"→ trader watchlist remove NVDA --list tr-watchlist
+  "show my TR portfolio"         → trader watchlist show tr-portfolio
+  "what's on my IBKR watchlist"  → trader watchlist show default
+
 Quotes & Signals:
   uv run trader quotes TICKER [TICKER ...]
   uv run trader signals TICKER [--strategy rsi|macd|ma_cross|bnf]
