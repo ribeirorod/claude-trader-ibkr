@@ -284,8 +284,48 @@ Naked put:
 
 ---
 
+---
+
+## Pullback Strategy Integration
+
+The `pullback` strategy (`trader/strategies/pullback.py`) generates directional signals specifically designed for options trades. When invoked with `--with-options`, it automatically recommends a contract.
+
+### Quick workflow — pullback-driven options trade
+
+```bash
+# 1. Check for pullback signals with options recommendation
+uv run trader strategies signals --tickers SPY,QQQ,AAPL --strategy pullback --with-options --expiry 2026-04-17
+
+# 2. Output includes an "options" block with strike, delta, qty, max_risk
+# 3. If recommendation looks good, execute:
+uv run trader orders buy SPY 2 --contract-type option --expiry 2026-04-17 --strike 420 --right put
+```
+
+### When to use pullback vs manual options analysis
+
+| Scenario | Use |
+|----------|-----|
+| Automated signal → defined-risk directional trade | `pullback --with-options` (fast, systematic) |
+| Earnings play, IV crush, multi-leg spread | This skill (manual options-strategy-advisor) |
+| Hedging existing equity position | This skill (protective put / collar) |
+| Income generation on held stock | This skill (covered call) |
+
+### Pullback signal → options strategy mapping
+
+| Signal | Default recommendation | When to upgrade |
+|--------|----------------------|-----------------|
+| -1 (bearish pullback) | Buy put (1 ATR OTM, 30-45 DTE) | High IV → bear put spread instead (sell further OTM put to reduce cost) |
+| +1 (bullish pullback) | Buy call (1 ATR OTM, 30-45 DTE) | High IV → bull call spread instead |
+| -1 (high conviction + low IV) | Buy put outright | IV < HV → cheap premium, outright is efficient |
+| -1 (high conviction + high IV) | Bear put spread | IV > HV → spread offsets inflated premium |
+
+To upgrade from a single leg to a spread, use this skill's full analysis workflow (Steps 1-7) after getting the initial pullback signal.
+
+---
+
 ## See Also
 
 - `trader-cli` skill — full CLI reference for orders, quotes, positions
+- `trader-strategies` skill — pullback strategy details, options_selector module
 - `portfolio-manager` skill — to check how options positions affect overall portfolio Greeks
 - `position-sizer` skill — for equity position sizing if converting an options trade to stock

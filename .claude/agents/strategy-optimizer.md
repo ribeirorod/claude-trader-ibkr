@@ -44,7 +44,7 @@ Target 3–8 tickers total. Log your selection rationale.
 
 ### Step 4 — Backtest current params
 
-For each selected ticker and active strategy (default: rsi, macd, ma_cross):
+For each selected ticker and active strategy (default: rsi, macd, ma_cross, pullback):
 
 ```bash
 uv run trader strategies backtest TICKER --strategy STRATEGY_NAME

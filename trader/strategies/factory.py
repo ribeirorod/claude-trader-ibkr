@@ -6,6 +6,7 @@ from trader.strategies.macd import MACDStrategy
 from trader.strategies.ma_cross import MACrossStrategy
 from trader.strategies.bnf import BNFStrategy
 from trader.strategies.momentum import MomentumStrategy
+from trader.strategies.pullback import PullbackStrategy
 from trader.strategies.base import BaseStrategy
 
 _REGISTRY = {
@@ -14,6 +15,7 @@ _REGISTRY = {
     "ma_cross": MACrossStrategy,
     "bnf": BNFStrategy,
     "momentum": MomentumStrategy,
+    "pullback": PullbackStrategy,
 }
 
 _SECTOR_PARAMS_FILE = Path(__file__).parent / "sector_params.json"
