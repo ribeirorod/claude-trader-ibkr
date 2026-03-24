@@ -9,7 +9,7 @@ description: Use when validating a trading strategy through backtesting, stress-
 
 Systematic methodology for validating trading strategies via our CLI's `trader strategies backtest` and `trader strategies optimize` commands. Emphasizes robustness over optimism — the goal is to find strategies that "break the least" under adversity, not those that look best on paper. Produces a final verdict: **Deploy / Refine / Abandon**.
 
-**Scope:** Applies only to rule-based, systematic strategies (rsi, macd, ma_cross, bnf). Not suitable for discretionary trade review.
+**Scope:** Applies only to rule-based, systematic strategies (rsi, macd, ma_cross, bnf, momentum, pullback). Not suitable for discretionary trade review.
 
 ## When to Use
 
@@ -40,8 +40,10 @@ trader strategies signals --tickers AAPL --strategy rsi
 trader strategies run AAPL --strategy rsi --lookback 90d
 ```
 
-Available strategies: `rsi`, `macd`, `ma_cross`, `bnf`
+Available strategies: `rsi`, `macd`, `ma_cross`, `bnf`, `momentum`, `pullback`
 Available metrics: `sharpe`, `returns`, `win_rate`
+
+**Note on pullback strategy:** The `pullback` strategy generates both long (+1) and short (-1) signals. The backtester correctly handles short signals — `returns × signal` yields positive returns when shorting into a decline. Requires ≥300 bars of history (EMA200 needs 200+ bars to stabilize). Use `--from 2023-01-01` or earlier for meaningful results.
 
 ## Five-Phase Workflow
 
