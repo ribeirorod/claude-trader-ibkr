@@ -9,6 +9,8 @@ class Quote(BaseModel):
     last: float | None = None
     volume: int | None = None
     contract_type: str = "stock"
+    sector: str = ""
+    industry: str = ""
 
 
 class OptionContract(BaseModel):

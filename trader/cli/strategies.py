@@ -81,8 +81,10 @@ def run_strategy(ctx, ticker, strategy, interval, lookback, params):
               help="Account value for options position sizing (default: read from broker).")
 @click.option("--params", default=None,
               help='JSON strategy params e.g. \'{"period":14}\'')
+@click.option("--sector", default=None,
+              help="Sector name for sector-optimized params (e.g. Technology, Energy).")
 @click.pass_context
-def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options, expiry, account_value, params):
+def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options, expiry, account_value, params, sector):
     """
     Generate trading signals for one or more tickers.
 
@@ -92,14 +94,17 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options,
     With --with-options, appends a recommended option contract (strike, expiry,
     delta, qty) based on the signal direction. Uses ATR for strike selection.
 
+    Pass --sector to use sector-optimized strategy parameters.
+
     \b
     Examples:
       trader strategies signals --tickers AAPL,MSFT --strategy rsi --with-news
       trader strategies signals --tickers SPY --strategy pullback --with-options --expiry 2026-04-17
+      trader strategies signals --tickers XOM,CVX --strategy rsi --sector Energy
     """
     ticker_list = [t.strip() for t in tickers.replace(",", " ").split()]
     p = json.loads(params) if params else None
-    strat = get_strategy(strategy, p)
+    strat = get_strategy(strategy, p, sector=sector)
     rf = RiskFilter()
     results = []
 
@@ -263,12 +268,19 @@ def backtest(ctx, ticker, strategy, from_date, params):
 @click.option("--metric", default="sharpe",
               type=click.Choice(["sharpe", "returns", "win_rate"]),
               help="Optimization metric: sharpe (default), returns, win_rate.")
+@click.option("--sector", default=None,
+              help="Sector name — if set, writes best params back to sector_params.json.")
 @click.pass_context
-def optimize(ctx, ticker, strategy, metric):
+def optimize(ctx, ticker, strategy, metric, sector):
     """
     Grid-search best parameters for STRATEGY on TICKER.
 
-    Example: trader strategies optimize AAPL --strategy rsi --metric sharpe
+    With --sector, writes optimized params back to sector_params.json for future use.
+
+    \b
+    Examples:
+      trader strategies optimize AAPL --strategy rsi --metric sharpe
+      trader strategies optimize XOM --strategy rsi --sector Energy
     """
     _grids = {
         "rsi": {"period": [7, 14, 21], "oversold": [25, 30], "overbought": [70, 75]},
@@ -287,4 +299,23 @@ def optimize(ctx, ticker, strategy, metric):
     opt = Optimizer()
     df = _fetch_ohlcv(ticker, "1d", "1y")
     best = opt.grid_search(strat_cls, df, _grids.get(strategy, {}), metric=metric)
-    output_json({"ticker": ticker, "strategy": strategy, "metric": metric, "best_params": best})
+    result = {"ticker": ticker, "strategy": strategy, "metric": metric, "best_params": best}
+
+    if sector:
+        from trader.strategies.factory import _SECTOR_PARAMS_FILE, _load_sector_params
+        import trader.strategies.factory as _factory_mod
+        sp_path = _SECTOR_PARAMS_FILE
+        if sp_path.exists():
+            raw = json.loads(sp_path.read_text())
+        else:
+            raw = {}
+        if sector not in raw:
+            raw[sector] = {}
+        raw[sector][strategy] = best
+        sp_path.write_text(json.dumps(raw, indent=2) + "\n")
+        # Invalidate cache so next call picks up new params
+        _factory_mod._sector_cache = None
+        result["sector"] = sector
+        result["sector_params_updated"] = True
+
+    output_json(result)
