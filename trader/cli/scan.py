@@ -146,12 +146,19 @@ def _run(ctx, coro):
               help="Maximum market cap in millions.")
 @click.option("--has-options", is_flag=True, default=False,
               help="Only include contracts with listed options.")
+# ── Signal overlay ─────────────────────────────────────────────────────────
+@click.option("--signals", is_flag=True, default=False,
+              help="Run strategy signals on each scan result (uses sector-optimized params).")
+@click.option("--strategy", default="rsi",
+              help="Strategy to run when --signals is set (rsi, macd, ma_cross, bnf, momentum).")
+@click.option("--lookback", default="90d",
+              help="History window for signals (e.g. 30d, 90d, 1y).")
 @click.pass_context
 def run_scan(ctx, scan_type, market, limit, price_above, price_below,
              volume_above, avg_volume_above, avg_usd_volume_above,
              ema20_above, ema50_above, ema200_above, ema200_below,
              change_above, change_below, mktcap_above, mktcap_below,
-             has_options):
+             has_options, signals, strategy, lookback):
     """
     Run a market scan by TYPE and return matching tickers.
 
@@ -170,9 +177,8 @@ def run_scan(ctx, scan_type, market, limit, price_above, price_below,
       trader scan run TOP_PERC_GAIN
       trader scan run MOST_ACTIVE --market STK.US.MAJOR --volume-above 500000 --price-above 5
       trader scan run HIGH_VS_52W_HL --ema200-above --avg-volume-above 200000 --limit 30
-      trader scan run OPT_VOLUME_MOST_ACTIVE --market STK.US.MAJOR
-      trader scan run TOP_PERC_GAIN --market STK.EU.LSE
-      trader scan run MOST_ACTIVE --market ETF.EQ.US.MAJOR
+      trader scan run TOP_PERC_GAIN --signals --strategy rsi
+      trader scan run HIGH_VS_52W_HL --signals --strategy macd --lookback 180d
     """
     filters = []
 
@@ -200,7 +206,64 @@ def run_scan(ctx, scan_type, market, limit, price_above, price_below,
     if has_options:
         filters.append({"code": "hasOptionsIs", "value": 1})
 
-    _run(ctx, lambda a: a.scan(scan_type, market, filters or None, limit))
+    if not signals:
+        _run(ctx, lambda a: a.scan(scan_type, market, filters or None, limit))
+        return
+
+    # Scan-to-signals pipeline: scan → enrich with sector → run strategy signals
+    adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+
+    async def run_with_signals():
+        await adapter.connect()
+        try:
+            results = await adapter.scan(scan_type, market, filters or None, limit)
+            return results
+        finally:
+            await adapter.disconnect()
+
+    try:
+        results = asyncio.run(run_with_signals())
+    except Exception as e:
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
+
+    # Run strategy signals on each scan result
+    from trader.strategies.factory import get_strategy
+    from trader.strategies.risk_filter import RiskFilter
+    from trader.strategies.stop_loss import atr as compute_atr, stop_level as compute_stop
+    from trader.cli.strategies import _fetch_ohlcv
+
+    rf = RiskFilter()
+    output = []
+    for r in results:
+        entry = r.model_dump()
+        try:
+            df = _fetch_ohlcv(r.symbol, "1d", lookback)
+            strat = get_strategy(strategy, sector=r.sector or None)
+            sig_series = strat.signals(df)
+            raw_signal = int(sig_series.iloc[-1])
+            try:
+                current_atr = round(float(compute_atr(df).iloc[-1]), 4)
+                price = float(df["close"].iloc[-1])
+                sl = round(compute_stop(df, entry_price=price), 4)
+            except Exception:
+                current_atr = None
+                sl = None
+            filtered = rf.filter(signal=raw_signal, quote=None,
+                                 position=None, sentiment=None)
+            entry["signal"] = filtered["signal"]
+            entry["signal_label"] = {1: "buy", -1: "sell", 0: "hold"}[filtered["signal"]]
+            entry["strategy"] = strategy
+            entry["strategy_params"] = strat.params
+            entry["filtered"] = filtered["filtered"]
+            entry["filter_reason"] = filtered["filter_reason"]
+            entry["atr"] = current_atr
+            entry["stop_level"] = sl
+        except Exception as e:
+            entry["signal"] = None
+            entry["signal_error"] = str(e)
+        output.append(entry)
+    output_json(output)
 
 
 @scan.command("types")
