@@ -1,0 +1,80 @@
+{
+  "_comment": "Per-sector strategy parameter overrides. Keys are GICS sector names (case-insensitive matching). Values are strategy-name → param overrides. Falls back to strategy defaults if sector/strategy not listed.",
+  "Technology": {
+    "rsi": {"period": 14, "oversold": 25, "overbought": 75},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 10, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.025},
+    "momentum": {"window": 20, "threshold": 0.04}
+  },
+  "Utilities": {
+    "rsi": {"period": 14, "oversold": 35, "overbought": 65},
+    "macd": {"fast": 8, "slow": 21, "signal": 7},
+    "ma_cross": {"fast_window": 10, "slow_window": 40},
+    "bnf": {"lookback": 15, "breakout_pct": 0.015},
+    "momentum": {"window": 15, "threshold": 0.02}
+  },
+  "Consumer Staples": {
+    "rsi": {"period": 14, "oversold": 35, "overbought": 65},
+    "macd": {"fast": 8, "slow": 21, "signal": 7},
+    "ma_cross": {"fast_window": 10, "slow_window": 40},
+    "bnf": {"lookback": 15, "breakout_pct": 0.015},
+    "momentum": {"window": 15, "threshold": 0.02}
+  },
+  "Energy": {
+    "rsi": {"period": 21, "oversold": 30, "overbought": 70},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 20, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.03},
+    "momentum": {"window": 30, "threshold": 0.05}
+  },
+  "Health Care": {
+    "rsi": {"period": 14, "oversold": 28, "overbought": 72},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 15, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.025},
+    "momentum": {"window": 20, "threshold": 0.04}
+  },
+  "Financials": {
+    "rsi": {"period": 14, "oversold": 30, "overbought": 70},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 20, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.02},
+    "momentum": {"window": 20, "threshold": 0.03}
+  },
+  "Industrials": {
+    "rsi": {"period": 14, "oversold": 30, "overbought": 70},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 20, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.02},
+    "momentum": {"window": 20, "threshold": 0.03}
+  },
+  "Materials": {
+    "rsi": {"period": 21, "oversold": 30, "overbought": 70},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 20, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.025},
+    "momentum": {"window": 25, "threshold": 0.04}
+  },
+  "Real Estate": {
+    "rsi": {"period": 14, "oversold": 32, "overbought": 68},
+    "macd": {"fast": 8, "slow": 21, "signal": 7},
+    "ma_cross": {"fast_window": 15, "slow_window": 40},
+    "bnf": {"lookback": 15, "breakout_pct": 0.02},
+    "momentum": {"window": 20, "threshold": 0.03}
+  },
+  "Communication Services": {
+    "rsi": {"period": 14, "oversold": 28, "overbought": 72},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 15, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.025},
+    "momentum": {"window": 20, "threshold": 0.04}
+  },
+  "Consumer Discretionary": {
+    "rsi": {"period": 14, "oversold": 28, "overbought": 72},
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "ma_cross": {"fast_window": 15, "slow_window": 50},
+    "bnf": {"lookback": 20, "breakout_pct": 0.025},
+    "momentum": {"window": 20, "threshold": 0.04}
+  }
+}

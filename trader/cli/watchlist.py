@@ -6,21 +6,44 @@ from trader.adapters.factory import get_adapter
 from trader.cli.__main__ import output_json
 
 # Storage: outputs/watchlists.json
-# Format: {"default": ["NVDA", "AAPL"], "momentum": ["PLTR", "VRT"]}
+# Format:
+#   {"default": {"tickers": ["NVDA","AAPL"], "sectors": {"NVDA": "Technology"}}}
+# Legacy format (plain list) is auto-migrated on load.
 
 def _wl_path(ctx) -> Path:
     output_dir = Path(ctx.find_root().obj.get("output_dir", "outputs"))
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir / "watchlists.json"
 
-def _load(ctx) -> dict[str, list[str]]:
+def _load(ctx) -> dict:
     p = _wl_path(ctx)
     if p.exists():
-        return json.loads(p.read_text())
+        raw = json.loads(p.read_text())
+        # Auto-migrate legacy format: {"name": ["AAPL"]} → {"name": {"tickers": [...], "sectors": {}}}
+        migrated = False
+        for k, v in raw.items():
+            if isinstance(v, list):
+                raw[k] = {"tickers": v, "sectors": {}}
+                migrated = True
+        if migrated:
+            p.write_text(json.dumps(raw, indent=2))
+        return raw
     return {}
 
-def _save(ctx, data: dict[str, list[str]]) -> None:
+def _save(ctx, data: dict) -> None:
     _wl_path(ctx).write_text(json.dumps(data, indent=2))
+
+def _get_tickers(data: dict, list_name: str) -> list[str]:
+    entry = data.get(list_name, {})
+    if isinstance(entry, list):
+        return entry
+    return entry.get("tickers", [])
+
+def _get_sectors(data: dict, list_name: str) -> dict[str, str]:
+    entry = data.get(list_name, {})
+    if isinstance(entry, dict):
+        return entry.get("sectors", {})
+    return {}
 
 
 @click.group()
@@ -33,7 +56,7 @@ def watchlist():
       trader watchlist add NVDA MSFT PLTR
       trader watchlist add VRT AGX --list 52wk-highs
       trader watchlist show
-      trader watchlist show 52wk-highs
+      trader watchlist show 52wk-highs --strategy rsi
       trader watchlist from-scan HIGH_VS_52W_HL --ema200-above --list 52wk-highs
 
     Stored in: outputs/watchlists.json
@@ -55,15 +78,19 @@ def add(ctx, tickers, list_name):
       trader watchlist add VRT AGX UTHR --list 52wk-highs
     """
     data = _load(ctx)
-    existing = set(data.get(list_name, []))
+    entry = data.get(list_name, {"tickers": [], "sectors": {}})
+    if isinstance(entry, list):
+        entry = {"tickers": entry, "sectors": {}}
+    existing = set(entry["tickers"])
     added = [t.upper() for t in tickers if t.upper() not in existing]
-    data[list_name] = sorted(existing | set(t.upper() for t in tickers))
+    entry["tickers"] = sorted(existing | set(t.upper() for t in tickers))
+    data[list_name] = entry
     _save(ctx, data)
     output_json({
         "list": list_name,
         "added": added,
-        "tickers": data[list_name],
-        "total": len(data[list_name]),
+        "tickers": entry["tickers"],
+        "total": len(entry["tickers"]),
     })
 
 
@@ -79,18 +106,25 @@ def remove(ctx, tickers, list_name):
     Example: trader watchlist remove NVDA MSFT --list 52wk-highs
     """
     data = _load(ctx)
+    entry = data.get(list_name, {"tickers": [], "sectors": {}})
+    if isinstance(entry, list):
+        entry = {"tickers": entry, "sectors": {}}
     upper = {t.upper() for t in tickers}
-    current = data.get(list_name, [])
-    removed = [t for t in current if t in upper]
-    data[list_name] = [t for t in current if t not in upper]
-    if not data[list_name]:
+    removed = [t for t in entry["tickers"] if t in upper]
+    entry["tickers"] = [t for t in entry["tickers"] if t not in upper]
+    # Clean sector entries
+    for t in removed:
+        entry.get("sectors", {}).pop(t, None)
+    if not entry["tickers"]:
         del data[list_name]
+    else:
+        data[list_name] = entry
     _save(ctx, data)
     output_json({
         "list": list_name,
         "removed": removed,
-        "tickers": data.get(list_name, []),
-        "total": len(data.get(list_name, [])),
+        "tickers": entry.get("tickers", []),
+        "total": len(entry.get("tickers", [])),
     })
 
 
@@ -107,31 +141,37 @@ def list_watchlists(ctx):
         output_json([])
         return
     output_json([
-        {"list": name, "tickers": tickers, "count": len(tickers)}
-        for name, tickers in sorted(data.items())
+        {"list": name, "tickers": _get_tickers(data, name), "count": len(_get_tickers(data, name))}
+        for name in sorted(data.keys())
     ])
 
 
 @watchlist.command("show")
 @click.argument("list_name", default="default")
 @click.option("--signals", is_flag=True, default=False,
-              help="Include RSI strategy signals alongside quotes.")
+              help="Include sentiment scores alongside quotes (legacy).")
+@click.option("--strategy", default=None,
+              help="Run strategy signals on each ticker (e.g. rsi, macd, ma_cross).")
+@click.option("--interval", default="1d", help="Bar interval for strategy signals.")
+@click.option("--lookback", default="90d", help="History window for strategy signals.")
 @click.pass_context
-def show(ctx, list_name, signals):
+def show(ctx, list_name, signals, strategy, interval, lookback):
     """
     Get live quotes for all tickers in a watchlist.
 
-    Pass --signals to also run RSI signals on each ticker.
+    Pass --strategy to run buy/sell/hold strategy signals on each ticker.
+    Uses sector-optimized parameters when sector data is available.
 
     \b
     Examples:
       trader watchlist show
-      trader watchlist show momentum
+      trader watchlist show momentum --strategy rsi
+      trader watchlist show 52wk-highs --strategy macd --lookback 180d
       trader watchlist show 52wk-highs --signals
-      trader --save watchlist show
     """
     data = _load(ctx)
-    tickers = data.get(list_name, [])
+    tickers = _get_tickers(data, list_name)
+    sector_map = _get_sectors(data, list_name)
     if not tickers:
         output_json({"error": f"Watchlist '{list_name}' is empty or does not exist."})
         sys.exit(1)
@@ -144,8 +184,48 @@ def show(ctx, list_name, signals):
             quotes = await adapter.get_quotes(tickers)
             result = [q.model_dump() for q in quotes]
 
-            if signals:
+            # Attach stored sector info to each quote
+            for r in result:
+                r["sector"] = sector_map.get(r["ticker"], "")
+
+            if strategy:
+                import yfinance as yf
                 from trader.strategies.factory import get_strategy
+                from trader.strategies.risk_filter import RiskFilter
+                from trader.strategies.stop_loss import atr as compute_atr, stop_level as compute_stop
+                from trader.cli.strategies import _fetch_ohlcv
+
+                rf = RiskFilter()
+                for r in result:
+                    ticker = r["ticker"]
+                    try:
+                        df = _fetch_ohlcv(ticker, interval, lookback)
+                        sector = r.get("sector", "")
+                        strat = get_strategy(strategy, sector=sector)
+                        sig_series = strat.signals(df)
+                        raw_signal = int(sig_series.iloc[-1])
+                        try:
+                            current_atr = round(float(compute_atr(df).iloc[-1]), 4)
+                            entry = float(df["close"].iloc[-1])
+                            sl = round(compute_stop(df, entry_price=entry), 4)
+                        except Exception:
+                            current_atr = None
+                            sl = None
+                        filtered = rf.filter(signal=raw_signal, quote=None,
+                                             position=None, sentiment=None)
+                        r["signal"] = filtered["signal"]
+                        r["signal_label"] = {1: "buy", -1: "sell", 0: "hold"}[filtered["signal"]]
+                        r["strategy"] = strategy
+                        r["strategy_params"] = strat.params
+                        r["filtered"] = filtered["filtered"]
+                        r["filter_reason"] = filtered["filter_reason"]
+                        r["atr"] = current_atr
+                        r["stop_level"] = sl
+                    except Exception as e:
+                        r["signal"] = None
+                        r["signal_error"] = str(e)
+
+            if signals:
                 from trader.news.benzinga import BenzingaClient
                 from trader.news.sentiment import SentimentScorer
 
@@ -189,7 +269,7 @@ def clear(ctx, list_name):
     """
     data = _load(ctx)
     if list_name in data:
-        count = len(data[list_name])
+        count = len(_get_tickers(data, list_name))
         del data[list_name]
         _save(ctx, data)
         output_json({"cleared": list_name, "removed_count": count})
@@ -222,6 +302,8 @@ def from_scan(ctx, scan_type, list_name, replace, market, limit,
     """
     Populate a watchlist from a live IBKR scan.
 
+    Stores sector metadata for each ticker to enable sector-optimized strategy signals.
+
     \b
     Examples:
       trader watchlist from-scan HIGH_VS_52W_HL --ema200-above --list 52wk-highs
@@ -253,28 +335,40 @@ def from_scan(ctx, scan_type, list_name, replace, market, limit,
         await adapter.connect()
         try:
             results = await adapter.scan(scan_type, market, filters or None, limit)
-            return [r.symbol for r in results]
+            return results
         finally:
             await adapter.disconnect()
 
     try:
-        new_tickers = asyncio.run(run())
+        results = asyncio.run(run())
     except Exception as e:
         click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
         sys.exit(1)
 
+    new_tickers = [r.symbol for r in results]
+    new_sectors = {r.symbol: r.sector for r in results if r.sector}
+
     data = _load(ctx)
     if replace:
-        data[list_name] = sorted(set(new_tickers))
+        data[list_name] = {
+            "tickers": sorted(set(new_tickers)),
+            "sectors": new_sectors,
+        }
     else:
-        existing = set(data.get(list_name, []))
-        data[list_name] = sorted(existing | set(new_tickers))
+        entry = data.get(list_name, {"tickers": [], "sectors": {}})
+        if isinstance(entry, list):
+            entry = {"tickers": entry, "sectors": {}}
+        existing = set(entry["tickers"])
+        entry["tickers"] = sorted(existing | set(new_tickers))
+        entry["sectors"] = {**entry.get("sectors", {}), **new_sectors}
+        data[list_name] = entry
     _save(ctx, data)
 
     output_json({
         "list": list_name,
         "scan_type": scan_type,
         "added": new_tickers,
-        "tickers": data[list_name],
-        "total": len(data[list_name]),
+        "sectors": new_sectors,
+        "tickers": _get_tickers(data, list_name),
+        "total": len(_get_tickers(data, list_name)),
     })

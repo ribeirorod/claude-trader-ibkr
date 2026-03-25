@@ -54,6 +54,10 @@ class Adapter(ABC):
     @abstractmethod
     async def delete_alert(self, alert_id: str) -> bool: ...
 
+    async def get_contract_details(self, conid: int) -> dict:
+        """Return sector/industry metadata for a contract. Override in subclass."""
+        return {}
+
     @abstractmethod
     async def scan(
         self,

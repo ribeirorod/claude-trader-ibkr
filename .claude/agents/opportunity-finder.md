@@ -253,9 +253,19 @@ uv run trader quotes get TICKER
 Confirm the ETF is EU UCITS and tradeable from this account before proposing.
 
 **Options candidates (top 3 survivors):**
-Invoke the `options-strategy-advisor` skill for each. Pass: ticker, current price, IV rank, put/call ratio, sentiment score, and account size. The skill will determine the best strategy (covered call, cash-secured put, spread, iron condor) and return a sized, ready-to-execute proposal.
+
+First, check for pullback signals with options overlay:
+```bash
+uv run trader strategies signals --tickers TICKER --strategy pullback --with-options
+```
+
+If the pullback strategy returns a non-zero signal with an options recommendation, use it directly — the `--with-options` output includes strike, delta, qty, and max risk. This is the fastest path for directional options trades.
+
+If no pullback signal, invoke the `options-strategy-advisor` skill for each. Pass: ticker, current price, IV rank, put/call ratio, sentiment score, and account size. The skill will determine the best strategy (covered call, cash-secured put, spread, iron condor) and return a sized, ready-to-execute proposal.
 
 Key strategies by context:
+- Pullback -1 signal → buy put (from --with-options output) — defined risk, bearish directional
+- Pullback +1 signal → buy call (from --with-options output) — defined risk, bullish pullback
 - High IV + neutral signal → iron condor or short strangle (collect premium)
 - High IV + bullish signal → cash-secured put (get paid to enter)
 - Existing long position + neutral → covered call (generate income)
