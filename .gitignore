@@ -25,3 +25,4 @@ docs/superpowers/
 .playwright-mcp/*
 .planning/
 .trader/
+.claude/worktrees/
