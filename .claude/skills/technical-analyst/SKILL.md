@@ -46,7 +46,13 @@ uv run trader strategies run TICKER --strategy ma_cross --lookback 1y
 uv run trader strategies run TICKER --strategy rsi
 ```
 
-Also pull recent news sentiment for context:
+Also pull pullback strategy signal (detects multi-factor pullback setups):
+
+```bash
+uv run trader strategies run TICKER --strategy pullback --lookback 1y
+```
+
+And recent news sentiment for context:
 
 ```bash
 uv run trader news sentiment TICKER --lookback 7d
@@ -67,8 +73,10 @@ From `ma_cross` output, determine:
 Classify trend strength:
 - **Strong uptrend** — Price > short MA > long MA, widening spread
 - **Weak uptrend** — Price > long MA but below short MA (pullback)
+- **Pullback buy setup** — Pullback strategy signal = +1 (bullish pullback in uptrend, volume drying up, ATR expanding)
 - **Distribution** — Price < short MA but still > long MA (caution)
 - **Downtrend** — Price < both MAs
+- **Pullback short setup** — Pullback strategy signal = -1 (bearish pullback in downtrend, weak bounce, ATR expanding)
 
 ### Step 3: RSI Momentum Assessment
 
@@ -185,6 +193,7 @@ Probability assignment rules:
 | Current price + 52wk range | `uv run trader quotes get TICKER` |
 | MA trend + levels (1yr lookback) | `uv run trader strategies run TICKER --strategy ma_cross --lookback 1y` |
 | RSI momentum | `uv run trader strategies run TICKER --strategy rsi` |
+| Pullback setup detection | `uv run trader strategies run TICKER --strategy pullback --lookback 1y` |
 | News sentiment context | `uv run trader news sentiment TICKER --lookback 7d` |
 
 ---

@@ -376,6 +376,19 @@ class IBKRRestAdapter(Adapter):
         )
         return bool(resp.get("success") or resp.get("deleted") or True)
 
+    # ----------------------------------------------------------- contract info
+
+    async def get_contract_details(self, conid: int) -> dict:
+        """Fetch sector/industry from IBKR contract info endpoint."""
+        try:
+            data = await self._client.get(f"/iserver/contract/{conid}/info")
+            return {
+                "sector": data.get("category", "") or data.get("sector", ""),
+                "industry": data.get("industry", ""),
+            }
+        except Exception:
+            return {"sector": "", "industry": ""}
+
     # ------------------------------------------------------------------ scanner
 
     async def scan(
@@ -393,17 +406,24 @@ class IBKRRestAdapter(Adapter):
         }
         data = await self._client.post("/iserver/scanner/run", json=payload)
         contracts = data.get("contracts", []) if isinstance(data, dict) else data
-        return [
-            ScanResult(
+        trimmed = contracts[:limit]
+
+        # Enrich with sector/industry from contract details (parallel)
+        async def _enrich(c: dict) -> ScanResult:
+            cid = c.get("con_id")
+            details = await self.get_contract_details(cid) if cid else {}
+            return ScanResult(
                 symbol=c.get("symbol", ""),
                 company_name=c.get("company_name", ""),
-                conid=c.get("con_id") or None,
+                conid=cid or None,
                 listing_exchange=c.get("listing_exchange", ""),
                 sec_type=c.get("sec_type", ""),
                 column_value=c.get("column_name", ""),
+                sector=details.get("sector", ""),
+                industry=details.get("industry", ""),
             )
-            for c in contracts[:limit]
-        ]
+
+        return await asyncio.gather(*[_enrich(c) for c in trimmed])
 
     async def scan_params(self) -> dict:
         return await self._client.get("/iserver/scanner/params")
