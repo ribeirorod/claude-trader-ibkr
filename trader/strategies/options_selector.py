@@ -23,6 +23,20 @@ class OptionsRecommendation:
     rationale: str
 
 
+@dataclass
+class SpreadRecommendation:
+    """Vertical spread recommendation (buy near strike, sell far strike)."""
+
+    action: str  # "put_spread", "call_spread", or "no_action"
+    long_leg: OptionContract | None
+    short_leg: OptionContract | None
+    suggested_qty: int
+    max_risk: float  # net debit × 100 × qty (capped loss)
+    max_reward: float  # (strike width - net debit) × 100 × qty
+    net_debit: float  # per-spread cost
+    rationale: str
+
+
 def select_contract(
     signal: int,
     current_price: float,
@@ -117,6 +131,120 @@ def select_contract(
         contract=best,
         suggested_qty=suggested_qty,
         max_risk=max_risk,
+        rationale=rationale,
+    )
+
+
+def select_spread(
+    signal: int,
+    current_price: float,
+    current_atr: float,
+    chain: OptionChain,
+    account_value: float,
+    risk_pct: float = 0.02,
+    min_dte: int = 30,
+    max_dte: int = 45,
+    target_delta_range: tuple[float, float] = (0.30, 0.40),
+    spread_width_atr: float = 0.5,
+) -> SpreadRecommendation:
+    """Build a vertical spread from a directional signal.
+
+    For signal -1: bear put spread (buy higher-strike put, sell lower-strike put).
+    For signal +1: bull call spread (buy lower-strike call, sell higher-strike call).
+
+    The spread width targets ``spread_width_atr × ATR`` between strikes, cutting
+    premium cost roughly in half compared to a naked long option.
+
+    Parameters
+    ----------
+    spread_width_atr : float
+        Target spread width as a multiple of ATR (default 0.5 ATR).
+    """
+    no_action = SpreadRecommendation(
+        action="no_action", long_leg=None, short_leg=None,
+        suggested_qty=0, max_risk=0.0, max_reward=0.0, net_debit=0.0,
+        rationale="",
+    )
+
+    if signal == 0:
+        no_action.rationale = "Signal is neutral — no spread."
+        return no_action
+
+    right = "put" if signal == -1 else "call"
+    action = f"{right}_spread"
+
+    # Target long leg strike: 1 ATR from current price
+    if signal == -1:
+        long_target = current_price - current_atr
+    else:
+        long_target = current_price + current_atr
+
+    target_width = current_atr * spread_width_atr
+
+    candidates = _filter_candidates(
+        chain.contracts, right, chain.expiry, min_dte, max_dte,
+    )
+
+    if len(candidates) < 2:
+        no_action.rationale = f"Need ≥2 {right} contracts for a spread, found {len(candidates)}."
+        return no_action
+
+    # Pick long leg: best candidate near target strike with target delta
+    long_leg = _rank_candidates(candidates, long_target, target_delta_range)
+    if long_leg is None:
+        long_leg = min(candidates, key=lambda c: abs(c.strike - long_target))
+
+    # Pick short leg: further OTM by ~spread_width
+    if signal == -1:
+        short_target = long_leg.strike - target_width
+        short_candidates = [c for c in candidates if c.strike < long_leg.strike]
+    else:
+        short_target = long_leg.strike + target_width
+        short_candidates = [c for c in candidates if c.strike > long_leg.strike]
+
+    if not short_candidates:
+        no_action.rationale = f"No {right} contract available for short leg of spread."
+        return no_action
+
+    short_leg = min(short_candidates, key=lambda c: abs(c.strike - short_target))
+
+    # Calculate net debit
+    long_ask = long_leg.ask or long_leg.last or 0.0
+    short_bid = short_leg.bid or short_leg.last or 0.0
+    net_debit = round(long_ask - short_bid, 2)
+
+    if net_debit <= 0:
+        no_action.rationale = "Net debit is zero or credit — spread pricing invalid."
+        return no_action
+
+    # Position sizing
+    max_dollar_risk = account_value * risk_pct
+    cost_per_spread = net_debit * 100
+    suggested_qty = max(1, int(max_dollar_risk / cost_per_spread))
+    max_risk = round(cost_per_spread * suggested_qty, 2)
+
+    strike_width = abs(long_leg.strike - short_leg.strike)
+    max_reward_per = (strike_width - net_debit) * 100
+    max_reward = round(max_reward_per * suggested_qty, 2)
+
+    long_delta = f"{long_leg.delta:.2f}" if long_leg.delta is not None else "n/a"
+    rationale = (
+        f"{'Bear put' if signal == -1 else 'Bull call'} spread: "
+        f"buy {long_leg.strike} / sell {short_leg.strike} {right}, "
+        f"delta {long_delta}, expiry {long_leg.expiry}. "
+        f"Net debit ${net_debit:.2f}, width ${strike_width:.0f}. "
+        f"Max risk ${max_risk:.0f}, max reward ${max_reward:.0f} "
+        f"({suggested_qty} spread{'s' if suggested_qty > 1 else ''})."
+    )
+
+    return SpreadRecommendation(
+        action=action,
+        long_leg=long_leg,
+        short_leg=short_leg,
+        suggested_qty=suggested_qty,
+        max_risk=max_risk,
+        max_reward=max_reward,
+        net_debit=net_debit,
         rationale=rationale,
     )
 
