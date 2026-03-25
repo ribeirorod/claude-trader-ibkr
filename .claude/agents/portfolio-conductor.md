@@ -137,9 +137,16 @@ Build `geo_context` object:
 ```
 
 Rules:
-- `severity = High` → set `block_new_longs: true` (no new entries until hedge confirmed); set `hedge_suggested: true`
-- `severity = Medium` → pass affected sectors to opportunity-finder as exclusions; do not block
+- `severity = High` → set `block_new_longs: true` (no new entries until hedge confirmed); set `hedge_suggested: true`; auto-dispatch hedge using the bearish decision tree (prefer inverse ETF from `.trader/inverse_etfs.json`, then index puts)
+- `severity = Medium` → pass affected sectors to opportunity-finder as exclusions; consider sector-specific puts if affected_tickers overlap with held positions
 - `severity = Low/None` → pass geo_context with empty lists; no action
+
+**Auto-hedging (when `hedge_suggested: true`):**
+1. Read `.trader/inverse_etfs.json` for mapped inverse ETFs
+2. Size hedge at 5-10% of net liquidation (proportional to severity)
+3. Prefer inverse ETFs over puts for index hedges (simpler, no expiry)
+4. Execute immediately in autonomous mode — hedges are time-sensitive
+5. Log with `"event": "HEDGE_EXECUTED"` and `"trigger": "geo_high_severity"`
 
 Log the scan result:
 ```bash
@@ -233,11 +240,33 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 
 Then execute:
 ```bash
+# ── Long entries ──────────────────────────────────────────────────────────────
 # Equity buy
 uv run trader orders buy TICKER SHARES --type limit --price PRICE
 
-# Options
+# ── Bearish / short entries ───────────────────────────────────────────────────
+# Short-sell equity (IBKR SSHORT — opens a new short position)
+uv run trader orders short TICKER SHARES --type limit --price PRICE
+# Short with bracket (entry + cover stop + cover target)
+uv run trader orders short TICKER SHARES --type bracket --price PRICE --take-profit COVER_TARGET --stop-loss COVER_STOP
+
+# Buy put option (defined-risk bearish directional)
+uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike PRICE --right put
+# Buy put spread (lower cost bearish — buy higher strike put, sell lower strike put)
+# Execute as two legs:
+uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike LONG_STRIKE --right put
+uv run trader orders sell TICKER QTY --contract-type option --expiry DATE --strike SHORT_STRIKE --right put
+
+# Buy inverse ETF (UCITS — for broad market hedging, see .trader/inverse_etfs.json)
+uv run trader orders buy INVERSE_ETF SHARES --type limit --price PRICE --contract-type etf
+
+# ── Options (all directions) ─────────────────────────────────────────────────
 uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike PRICE --right call|put
+
+# ── Closing / covering ───────────────────────────────────────────────────────
+# Cover a short position (buy-to-cover)
+uv run trader orders cover TICKER
+uv run trader orders cover TICKER --price LIMIT_PRICE --qty PARTIAL_QTY
 
 # Fixed stop loss (use for new entries where stop is at a specific support level)
 uv run trader orders stop TICKER --price PRICE
@@ -260,6 +289,53 @@ uv run trader orders sell TICKER SHARES --type limit --price PRICE
 - High-conviction hold: use wider trail (5%) to avoid shakeouts
 - Sector rotation / weakening: tighten trail (2-3%) or switch to fixed stop near current price
 
+### Bearish trade decision tree
+
+When a proposal has `signal: -1` (from pullback, opportunity-finder, or risk-monitor hedge suggestion), auto-dispatch follows this priority:
+
+1. **Put option available** (from `--with-options` overlay) → execute `buy put` — defined risk, no margin required
+2. **Put spread recommended** (from options_selector `select_spread()`) → execute both legs — lower premium, still defined risk
+3. **Inverse ETF mapped** (check `.trader/inverse_etfs.json` for the underlying index/sector) → execute `buy INVERSE_ETF` — simpler, no expiry management
+4. **Equity shortable** (confirmed by opportunity-finder) → execute `short TICKER` with bracket stop — unlimited risk, use only with strong conviction + tight stop
+5. **No viable bearish vehicle** → log as `BEARISH_SIGNAL_NO_VEHICLE` and skip
+
+**Autonomous execution for bearish signals:** When `AGENT_MODE=autonomous`, bearish trades follow the same auto-dispatch as long trades — no human intervention required. The decision tree above applies automatically. Always log `ORDER_INTENT` with `"direction": "bearish"` before execution.
+
+**Risk guardrails for bearish positions:**
+- Max combined bearish exposure: 20% of net liquidation (shorts + puts + inverse ETFs)
+- Every short equity position MUST have a stop-loss (bracket or separate stop order)
+- Put/spread max risk per trade: same as long side (`risk_pct` from profile, default 2%)
+- Inverse ETFs follow same sizing rules as regular ETF positions
+
+### Options position management
+
+For any open option positions (puts or calls), check on every run:
+
+```bash
+uv run trader positions list  # look for contract_type: option entries
+```
+
+**Expiry management (DTE thresholds):**
+- **DTE ≤ 5**: Close the position (sell to close) unless it is deep ITM and intended for exercise
+- **DTE ≤ 14**: Evaluate — if profitable (≥ 50% of max gain), close to lock in profits; if losing, consider rolling
+- **DTE ≤ 21**: Monitor — if losing and vol has crushed, consider rolling to next monthly expiry
+
+**Roll decision:** When rolling, close existing position and open new one in same command sequence:
+```bash
+# Close existing put
+uv run trader orders sell TICKER QTY --contract-type option --expiry OLD_DATE --strike OLD_STRIKE --right put
+# Open new put at next expiry
+uv run trader orders buy TICKER QTY --contract-type option --expiry NEW_DATE --strike NEW_STRIKE --right put
+```
+
+**Profit target:** Close puts/calls when unrealized gain reaches 50-80% of max possible gain (premium paid). Don't hold for the last 20% — theta decay is not worth the gamma risk.
+
+**Defense:** If a short put in a spread is breached (underlying drops below short strike):
+- If spread: max loss is capped — let it ride or close early to salvage remaining value
+- If naked long put: hold if thesis intact, close if thesis broken
+
+Log all options management actions with `"event": "OPTIONS_MGMT"` in agent.jsonl.
+
 ### 9. Log run end
 
 ```bash
@@ -271,6 +347,10 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 - Calm day, healthy positions → risk-monitor clean, health shows minor drift, opportunity-finder finds nothing → log "do nothing", exit cleanly
 - Strong pre-market signal → opportunity-finder surfaces VCP breakout in semiconductors → position-sizer sizes it → conductor logs intent → executes limit order
 - Position down 22% → risk-monitor flags tail risk → conductor places stop or trims
+- Pullback fires -1 on NVDA → options overlay returns put recommendation → conductor auto-executes buy put → logs `ORDER_INTENT` with `direction: bearish`
+- Geo scan = High severity → conductor checks inverse ETF map → buys XISX (short S&P 500) as portfolio hedge → blocks new longs
+- Put position at 10 DTE, up 60% → conductor sells to close, logs `OPTIONS_MGMT` event
+- Put spread short leg breached → spread has capped loss → conductor holds, logs monitoring note
 
 ## Skills Available to Dispatch
 

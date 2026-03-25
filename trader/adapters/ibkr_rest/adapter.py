@@ -129,10 +129,15 @@ class IBKRRestAdapter(Adapter):
         ibkr_order_type = _ORDER_TYPE_MAP.get(req.order_type)
         if ibkr_order_type is None:
             raise ValueError(f"Unsupported order_type '{req.order_type}'. Supported: {list(_ORDER_TYPE_MAP)}")
+        # IBKR uses "SELL" for closing longs, "SSHORT" for opening new shorts
+        if req.side == "short":
+            ibkr_side = "SSHORT"
+        else:
+            ibkr_side = req.side.upper()
         body = {
             "conid": conid,
             "orderType": ibkr_order_type,
-            "side": req.side.upper(),
+            "side": ibkr_side,
             "quantity": req.qty,
             "tif": "DAY",
         }
@@ -158,7 +163,7 @@ class IBKRRestAdapter(Adapter):
 
         # Place bracket child orders linked to parent
         if req.order_type == "bracket" and parent_order_id:
-            child_side = "SELL" if req.side == "buy" else "BUY"
+            child_side = "BUY" if req.side in ("sell", "short") else "SELL"
             children = []
             if req.take_profit:
                 children.append({
