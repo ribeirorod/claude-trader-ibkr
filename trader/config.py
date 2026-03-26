@@ -36,6 +36,18 @@ class Config:
     agent_profile_path: str = field(default_factory=lambda: os.getenv("AGENT_PROFILE_PATH", ".trader/profile.json"))
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
+    consensus_threshold: int = field(
+        default_factory=lambda: int(os.getenv("CONSENSUS_THRESHOLD", "3"))
+    )
+    watchlist_consensus_threshold: int = field(
+        default_factory=lambda: int(os.getenv("WATCHLIST_CONSENSUS_THRESHOLD", "2"))
+    )
+    discovery_ttl_days: int = field(
+        default_factory=lambda: int(os.getenv("DISCOVERY_TTL_DAYS", "14"))
+    )
+    pipeline_dir: str = field(
+        default_factory=lambda: os.getenv("PIPELINE_DIR", ".trader/pipeline")
+    )
 
     @property
     def active_account(self) -> str:
