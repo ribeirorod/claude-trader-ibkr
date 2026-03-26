@@ -83,8 +83,11 @@ def run_strategy(ctx, ticker, strategy, interval, lookback, params):
               help='JSON strategy params e.g. \'{"period":14}\'')
 @click.option("--sector", default=None,
               help="Sector name for sector-optimized params (e.g. Technology, Energy).")
+@click.option("--regime", default=None,
+              type=click.Choice(["bull", "caution", "bear"]),
+              help="Market regime for risk filtering. Auto-detected if omitted.")
 @click.pass_context
-def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options, expiry, account_value, params, sector):
+def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options, expiry, account_value, params, sector, regime):
     """
     Generate trading signals for one or more tickers.
 
@@ -147,7 +150,8 @@ def signals(ctx, tickers, strategy, interval, lookback, with_news, with_options,
                 sl = None
             sentiment = sentiments.get(ticker)
             filtered = rf.filter(signal=raw_signal, quote=None,
-                                  position=None, sentiment=sentiment)
+                                  position=None, sentiment=sentiment,
+                                  regime=regime)
             if sentiment:
                 velocity = sentiment.article_velocity
                 s_mult = round(max(0.0, 1.0 + sentiment.score * min(velocity, 3.0)), 3)  # floor at 0

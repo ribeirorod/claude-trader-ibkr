@@ -37,3 +37,37 @@ def test_signals_output_contains_sentiment_fields():
     assert "sentiment_velocity" in data[0]
     assert "atr" in data[0]
     assert "stop_level" in data[0]
+
+def test_signals_passes_regime_to_risk_filter():
+    """The --regime bear flag should cause RiskFilter to block long signals."""
+    from trader.strategies.risk_filter import RiskFilter
+
+    # Create uptrending data that would normally produce a buy signal
+    dates = pd.date_range("2026-01-01", periods=60, freq="B")
+    close = np.linspace(100, 150, 60)
+    df = pd.DataFrame({
+        "open": close - 1,
+        "high": close + 2,
+        "low": close - 2,
+        "close": close,
+        "volume": np.random.randint(1000000, 5000000, 60),
+    }, index=dates)
+
+    captured_kwargs = {}
+    original_filter = RiskFilter.filter
+    def spy_filter(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_filter(self, *args, **kwargs)
+
+    runner = CliRunner()
+    with patch("trader.cli.strategies._fetch_ohlcv", return_value=df), \
+         patch.object(RiskFilter, "filter", spy_filter):
+        result = runner.invoke(cli, [
+            "strategies", "signals",
+            "--tickers", "AAPL",
+            "--strategy", "rsi",
+            "--regime", "bear",
+        ])
+
+    assert result.exit_code == 0, result.output
+    assert captured_kwargs.get("regime") == "bear"
