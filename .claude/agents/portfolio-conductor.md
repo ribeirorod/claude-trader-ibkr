@@ -157,7 +157,37 @@ Pass `geo_context` to **all** specialist agents in Step 6.
 
 ---
 
-### 5b. Decide workflow
+### 5b. Check pipeline proposals
+
+**Pipeline-first:** Before dispatching specialists for discovery/analysis, check if the pipeline has already produced proposals:
+
+```bash
+cat .trader/pipeline/proposals.json 2>/dev/null | python3 -c "
+import json, sys
+from datetime import datetime, timezone, timedelta
+try:
+    data = json.load(sys.stdin)
+    run_ts = datetime.fromisoformat(data['run_id'].replace('Z', '+00:00'))
+    age_hours = (datetime.now(timezone.utc) - run_ts).total_seconds() / 3600
+    if age_hours <= 2:
+        print(json.dumps({'fresh': True, 'age_hours': round(age_hours, 1), 'total_proposals': data['total_proposals'], 'regime': data['regime']}))
+    else:
+        print(json.dumps({'fresh': False, 'age_hours': round(age_hours, 1)}))
+except: print(json.dumps({'fresh': False}))
+"
+```
+
+**If proposals are fresh (< 2 hours old):**
+- Skip `opportunity-finder` dispatch — the Scout and Analyst have already done this work
+- Read proposals directly and proceed to Step 7 (guardrail review) for each proposal
+- For **long** proposals, execute bracket orders: `uv run trader orders buy TICKER QTY --type bracket --price PRICE --stop-loss SL --take-profit TP`
+- For **hedge** proposals with options: `uv run trader orders buy TICKER QTY --contract-type option --right put --strike STRIKE --expiry EXPIRY`
+- For **ETF** proposals: `uv run trader orders buy TICKER QTY --type limit --price PRICE --contract-type etf`
+- Still run `risk-monitor`, `portfolio-health`, and `order-alert-manager` for position management
+
+**If proposals are stale or missing:** Fall back to the specialist dispatch workflow below.
+
+### 5c. Decide workflow
 
 **Bootstrap detection:** If positions = 0 AND open buy orders = 0 (a fresh or reset account), set `bootstrap = true`. Pass this flag to `opportunity-finder` and `portfolio-health` so they know to propose a full initial allocation rather than incremental adjustments. Skip `risk-monitor` (nothing to protect) and skip `strategy-optimizer` (no history to optimise yet). Note: orphaned GTC stop orders with no matching position or buy order do NOT count — `order-alert-manager` will cancel them in Step 6.
 
