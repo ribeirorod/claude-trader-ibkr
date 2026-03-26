@@ -11,9 +11,36 @@ def orders():
 
 def _run_order(ctx, req: OrderRequest):
     adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+    cfg = ctx.obj["config"]
+
     async def run():
         await adapter.connect()
         try:
+            # Guard check when AGENT_MODE=guarded
+            if cfg.agent_mode == "guarded" and req.side in ("buy", "short"):
+                from trader.guard import OrderGuard
+                acct = await adapter.get_account()
+                positions = await adapter.list_positions()
+                open_ords = await adapter.list_orders("open")
+                guard = OrderGuard()
+                result = guard.validate(
+                    order=req,
+                    account=acct,
+                    positions=positions,
+                    open_orders=open_ords,
+                    max_single_position_pct=cfg.max_position_pct,
+                    cash_reserve_pct=float(cfg.bear_cash_floor),
+                    max_new_positions_per_day=3,
+                    today_new_position_count=0,
+                )
+                if not result.allowed:
+                    import sys
+                    click.echo(json.dumps({
+                        "error": "Order rejected by OrderGuard",
+                        "reason": result.reason,
+                        "details": result.details,
+                    }))
+                    sys.exit(1)
             return await adapter.place_order(req)
         finally:
             await adapter.disconnect()
