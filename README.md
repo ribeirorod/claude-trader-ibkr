@@ -11,7 +11,7 @@ An autonomous portfolio conductor runs on a cron schedule, dispatching specialis
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - IBKR account (paper or live) — [open one here](https://www.interactivebrokers.com)
-- Java 17+ (for the IBKR Client Portal Gateway)
+- Docker (for the recommended setup) or Java 17+ (for running the gateway locally)
 - [Benzinga API key](https://benzinga.com/apis) (for news/sentiment commands)
 
 ---
@@ -36,31 +36,37 @@ Fill in the required values in `.env`:
 | Variable | Description |
 |----------|-------------|
 | `IB_ACCOUNT` | Your IBKR account ID — paper starts with `DU`, live with `U` |
-| `IBEAM_ACCOUNT` | Same as `IB_ACCOUNT` |
-| `IBEAM_PASSWORD` | Your IBKR login password |
 | `BENZINGA_API_KEY` | From [benzinga.com/apis](https://benzinga.com/apis) |
 | `AGENT_MODE` | `supervised` (safe default) or `autonomous` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | For Docker agent — see [docs/docker-auth.md](docs/docker-auth.md) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot for notifications and MFA relay |
+| `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
 
 Everything else can stay as defaults to get started.
 
 > **Start with `AGENT_MODE=supervised`** — the agent logs what it *would* do without placing real orders. Switch to `autonomous` once you're comfortable.
 
-### 3. Set up the IBKR Client Portal Gateway
+### 3. Start with Docker (recommended)
 
-Download and unzip the gateway (one-time):
+Download the IBKR Client Portal Gateway (one-time):
 
 ```bash
 wget https://download2.interactivebrokers.com/portal/clientportal.gw.zip
 unzip clientportal.gw.zip -d clientportal.gw
 ```
 
-Start it:
+Start everything:
 
 ```bash
-cd clientportal.gw && ./bin/run.sh root/conf.yaml
+make docker-up
 ```
 
-> **macOS:** If port 5001 is blocked, go to System Settings → General → AirDrop & Handoff → AirPlay Receiver → **Off**, then restart the gateway.
+This builds and starts two containers:
+
+| Container | Image | Purpose |
+|-----------|-------|---------|
+| `trader-ibkr-gateway-1` | `Dockerfile.gateway` (Eclipse Temurin JRE 17) | IBKR Client Portal REST API on port 5001 |
+| `trader-trader-1` | `Dockerfile` (Python 3.12 + Node.js + Playwright) | FastAPI server, APScheduler crons, Telegram bot, Claude agent SDK |
 
 ### 4. Authenticate
 
@@ -73,22 +79,18 @@ ssh -L 5001:localhost:5001 user@your-server
 # then open https://localhost:5001 locally
 ```
 
-### 5. Keep the session alive (ibeam)
+> **macOS:** If port 5001 is blocked, go to System Settings → General → AirDrop & Handoff → AirPlay Receiver → **Off**.
 
-The gateway session expires after ~10 min of inactivity. `ibeam` keeps it alive automatically:
+### 5. Session management
 
-```bash
-./scripts/start-gateway.sh
-```
+The gateway session expires after ~24h. The trader container keeps it alive automatically:
 
-You authenticate once in the browser — ibeam sends a `/tickle` ping every ~60s from then on. If the session ever drops, just re-authenticate in the browser once more.
+- **Healthcheck** (`ibkr-healthcheck` cron, every 5 min) — pings `/tickle` and checks auth status
+- **Auto re-auth** (`ibkr-reauth.py`) — Playwright-based headless re-authentication triggered when the session expires. For live accounts, MFA codes are relayed via Telegram.
 
-**Fully automatic re-auth** (no browser needed after first setup) requires a TOTP secret:
-- Re-enroll 2FA in IBKR Account Management using a standard authenticator app (Google Authenticator, Authy)
-- Copy the base32 secret shown during enrollment
-- Set `IBEAM_AUTHENTICATE=True` and `IBEAM_KEY=<secret>` in `.env`
+If auto re-auth fails, authenticate manually in the browser at `https://localhost:5001`.
 
-> **Note:** `buying_power` from `trader account balance` reflects IBKR's margin capacity (~6.7× cash on some accounts). This system always uses `cash` only — never margin.
+> **Note:** `buying_power` from `trader account balance` reflects IBKR's margin capacity (~6.7x cash on some accounts). This system always uses `cash` only — never margin.
 
 ### 6. Verify connection
 
@@ -104,6 +106,18 @@ Expected output:
   "buying_power": 1666666.6,
   "currency": "USD"
 }
+```
+
+### Local setup (without Docker)
+
+If you prefer to run the gateway locally without Docker:
+
+```bash
+# Start the gateway (requires Java 17+)
+cd clientportal.gw && ./bin/run.sh root/conf.yaml
+
+# In another terminal, start the server
+make server
 ```
 
 ---
@@ -184,36 +198,15 @@ Edit `.trader/profile.json` to adjust risk tolerance, preferred sectors, and pos
 
 ---
 
-## Portfolio Stats
+## Paper vs Live
 
-> Demo data — run `uv run trader report --save-assets` to regenerate with your real account data, then commit the updated `docs/assets/` files.
-
-<p align="center">
-  <img src="docs/assets/equity_curve.svg" width="65%"/>
-  <img src="docs/assets/allocation.svg" width="34%"/>
-</p>
-<p align="center">
-  <img src="docs/assets/pnl_trades.svg" width="65%"/>
-  <img src="docs/assets/drawdown.svg" width="34%"/>
-</p>
-
-```bash
-uv run trader report               # generates outputs/report.html
-uv run trader report --save-assets # refreshes docs/assets/ for the README
-uv run trader report --open        # opens report in browser
-```
-
----
-
-## Paper vs Live Trading
-
-Controlled entirely at the gateway login — select **Paper Trading** or **Live Trading** when you authenticate at `https://localhost:5001`. No code or config change needed to switch.
+Select **Paper Trading** or **Live Trading** at the gateway login screen (`https://localhost:5001`). No code or config change needed.
 
 ---
 
 ## Development
 
-### Running the server
+### Running locally
 
 ```bash
 make server          # start FastAPI + scheduler + Telegram polling
@@ -234,23 +227,62 @@ make test
 ### Docker
 
 ```bash
-make docker-up       # build image and start in background
-make docker-logs     # tail logs
-make docker-down     # stop and remove containers
+make docker-up              # build and start gateway + trader
+make docker-down            # stop and remove containers
+make docker-status          # show container health
+make docker-logs            # tail trader logs
+make docker-gateway-logs    # tail gateway logs
+make docker-reauth          # manually trigger Playwright re-auth
 ```
 
-Requires a `.env` file at the project root (copy from `.env.example`).
+**Rebuilding only the trader** (preserves gateway auth session):
+
+```bash
+docker compose build trader && docker compose up -d --no-deps trader
+```
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  docker compose                                         │
+│                                                         │
+│  ┌─────────────────┐    ┌────────────────────────────┐  │
+│  │  ibkr-gateway    │    │  trader                    │  │
+│  │  JRE 17          │◄───│  Python 3.12 + Node.js    │  │
+│  │  Port 5001       │    │  Port 9090                 │  │
+│  │                  │    │                            │  │
+│  │  Client Portal   │    │  FastAPI server            │  │
+│  │  REST API        │    │  APScheduler crons         │  │
+│  │                  │    │  Telegram bot              │  │
+│  └─────────────────┘    │  Claude agent SDK          │  │
+│         ▲                │  Playwright (reauth)       │  │
+│         │                └────────────────────────────┘  │
+│    :5001 exposed                    │                    │
+│    for browser auth           :9090 health endpoint      │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Volumes:**
+- `trader-data` → `/app/.trader` — logs, pipeline state, universe cache, profiles
+- `claude-auth` → `/home/trader/.claude` — Claude SDK auth state
+
+See [docs/docker-auth.md](docs/docker-auth.md) for Claude OAuth token setup.
 
 ---
 
 ## Common Issues
 
-**`ConnectTimeout`** — Gateway is not running. Start it (`clientportal.gw/bin/run.sh`) and authenticate in the browser.
+**`ConnectTimeout`** — Gateway is not running. Run `make docker-up` or start it manually.
 
-**`not authenticated`** — Session expired. Open `https://localhost:5001` and log in again. Run `./scripts/start-gateway.sh` to keep it alive going forward.
+**`not authenticated`** — Session expired. Open `https://localhost:5001` and log in again. The healthcheck cron will keep it alive after that.
 
 **`Address already in use` (port 5001)** — On macOS, disable AirPlay Receiver in System Settings → General → AirDrop & Handoff.
 
 **`No open position for AAPL`** — You don't hold a position; buy first before closing or setting stops.
 
 **Agent places no orders** — Check `AGENT_MODE` in `.env`. If `supervised`, it logs intent only. Check `.trader/logs/agent.jsonl` for `CASH_FLOOR_BLOCK` or guardrail rejections.
+
+**Scanner returns 0 results for EU/ETF/options** — Check `uv run trader universe refresh --market all` output for `scan_errors`. The IBKR scanner requires specific exchange location codes (e.g., `STK.EU.IBIS`, not `STK.EU.MAJOR`).
+
+**`Not logged in` in Telegram** — Claude OAuth token expired. Re-run `claude setup-token` on the host, update `.env`, then `docker compose up -d trader`. See [docs/docker-auth.md](docs/docker-auth.md).
