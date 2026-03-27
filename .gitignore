@@ -22,6 +22,7 @@ clientportal.gw/
 *.code-workspace
 
 docs/superpowers/
+docs/plans/
 .playwright-mcp/*
 .planning/
 .trader/
