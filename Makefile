@@ -1,22 +1,26 @@
-.PHONY: help install test server kill docker-up docker-down docker-logs
+.PHONY: help install test server kill \
+        docker-up docker-down docker-logs docker-gateway-logs \
+        docker-reauth docker-status
 
 # Default target
 help:
 	@echo "Usage: make <target>"
 	@echo ""
-	@echo "  install       Install all dependencies (including dev extras)"
-	@echo "  test          Run unit tests with the correct Python interpreter"
-	@echo "  server        Start the trader server (FastAPI + scheduler + Telegram)"
-	@echo "  kill          Stop the trader server"
-	@echo "  docker-up     Build and start via docker-compose"
-	@echo "  docker-down   Stop and remove docker-compose containers"
-	@echo "  docker-logs   Tail docker-compose logs"
+	@echo "  install               Install all dependencies (including dev extras)"
+	@echo "  test                  Run unit tests"
+	@echo "  server                Start the trader server locally (FastAPI + scheduler + Telegram)"
+	@echo "  kill                  Stop the local trader server"
+	@echo ""
+	@echo "  docker-up             Build and start all services (gateway + trader)"
+	@echo "  docker-down           Stop and remove containers"
+	@echo "  docker-status         Show container health and status"
+	@echo "  docker-logs           Tail trader container logs"
+	@echo "  docker-gateway-logs   Tail ibkr-gateway container logs"
+	@echo "  docker-reauth         Manually trigger Playwright re-auth inside trader container"
 
 install:
 	uv sync --extra dev
 
-# Always use 'uv run python -m pytest' — bare 'pytest' picks up the system
-# Python 3.12 from Homebrew and misses packages installed in the uv venv.
 test:
 	uv run python -m pytest tests/ -v
 
@@ -32,5 +36,14 @@ docker-up:
 docker-down:
 	docker compose down
 
+docker-status:
+	docker compose ps
+
 docker-logs:
 	docker compose logs -f trader
+
+docker-gateway-logs:
+	docker compose logs -f ibkr-gateway
+
+docker-reauth:
+	docker compose exec trader uv run python scripts/ibkr-reauth.py

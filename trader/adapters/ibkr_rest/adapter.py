@@ -123,6 +123,29 @@ class IBKRRestAdapter(Adapter):
             contracts.append(OptionContract(strike=strike, right="put", expiry=expiry))
         return OptionChain(ticker=ticker, expiry=expiry, contracts=contracts)
 
+    async def validate_option_strike(
+        self, ticker: str, expiry: str, strike: float, right: str
+    ) -> float | None:
+        """Check if a strike exists for ticker/expiry/right.
+
+        Returns the nearest valid strike if the exact one isn't available,
+        or None if the ticker has no options chain at all.
+        """
+        try:
+            chain = await self.get_option_chain(ticker, expiry)
+        except Exception:
+            return None
+        available = [
+            c.strike for c in chain.contracts
+            if c.right == right and c.strike is not None
+        ]
+        if not available:
+            return None
+        if strike in available:
+            return strike
+        # Snap to nearest available strike
+        return min(available, key=lambda s: abs(s - strike))
+
     async def place_order(self, req: OrderRequest) -> Order:
         conid = await self._resolve_conid(req.ticker, req.contract_type,
                                           req.expiry, req.strike, req.right)
@@ -403,8 +426,22 @@ class IBKRRestAdapter(Adapter):
         filters: list[dict] | None = None,
         limit: int = 20,
     ) -> list[ScanResult]:
+        # Map location to IBKR instrument type. EU stocks need "STOCK.EU",
+        # US stocks need "STK", ETFs need "ETF.EQ.US" as instrument, etc.
+        _INSTRUMENT_MAP = {
+            "STK.US": "STK",
+            "STK.EU": "STOCK.EU",
+            "ETF.EQ.US": "ETF.EQ.US",
+            "ETF.US": "ETF.EQ.US",
+        }
+        # Try longest prefix match
+        instrument = location.split(".")[0]
+        for prefix, instr in sorted(_INSTRUMENT_MAP.items(), key=lambda x: -len(x[0])):
+            if location.startswith(prefix):
+                instrument = instr
+                break
         payload: dict = {
-            "instrument": location.split(".")[0],  # e.g. "STK" from "STK.US.MAJOR"
+            "instrument": instrument,
             "location": location,
             "type": scan_type,
             "filter": filters or [],

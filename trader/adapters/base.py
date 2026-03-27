@@ -58,6 +58,24 @@ class Adapter(ABC):
         """Return sector/industry metadata for a contract. Override in subclass."""
         return {}
 
+    async def validate_option_strike(
+        self, ticker: str, expiry: str, strike: float, right: str
+    ) -> float | None:
+        """Check if a strike exists; return nearest valid strike or None."""
+        try:
+            chain = await self.get_option_chain(ticker, expiry)
+        except Exception:
+            return None
+        available = [
+            c.strike for c in chain.contracts
+            if c.right == right and c.strike is not None
+        ]
+        if not available:
+            return None
+        if strike in available:
+            return strike
+        return min(available, key=lambda s: abs(s - strike))
+
     @abstractmethod
     async def scan(
         self,

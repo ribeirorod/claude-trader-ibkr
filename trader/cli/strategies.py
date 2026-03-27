@@ -23,6 +23,8 @@ _YF_TICKER_MAP: dict[str, str] = {
     "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L",
     "SGLN": "SGLN.L", "PHAU": "PHAU.L", "AGGH": "AGGG.L", "IBTA": "IBTA.L",
     "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
+    # Inverse / short ETFs (UCITS)
+    "XSPD": "DXS3.DE", "XISP": "XISP.L", "DSPX": "DSPX.L",
 }
 
 def _resolve_yf_ticker(ticker: str) -> str:

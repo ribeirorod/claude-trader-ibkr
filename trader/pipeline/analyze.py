@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -20,8 +20,13 @@ from trader.strategies.stop_loss import (
     position_size as compute_position_size,
     regime_atr_multiplier,
 )
+from trader.config import Config
 from trader.models import Position, Order
 
+# Hard cap: no single proposal should exceed this % of NLV
+_MAX_POSITION_PCT = 10.0
+# Minimum price for candidates (filter out penny stocks with unreliable signals)
+_MIN_PRICE = 1.0
 
 # Re-use the yfinance ticker resolution from strategies CLI
 _YF_TICKER_MAP: dict[str, str] = {
@@ -29,6 +34,8 @@ _YF_TICKER_MAP: dict[str, str] = {
     "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L",
     "SGLN": "SGLN.L", "PHAU": "PHAU.L", "AGGH": "AGGG.L", "IBTA": "IBTA.L",
     "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
+    # Inverse / short ETFs (UCITS)
+    "XSPD": "DXS3.DE", "XISP": "XISP.L", "DSPX": "DSPX.L",
 }
 
 
@@ -43,6 +50,34 @@ def _fetch_ohlcv(ticker: str, period: str = "90d") -> pd.DataFrame:
         df.columns = df.columns.get_level_values(0)
     df.columns = [c.lower() for c in df.columns]
     return df
+
+
+def _get_sector(ticker: str) -> str:
+    """Look up GICS sector via yfinance info. Returns empty string on failure."""
+    try:
+        info = yf.Ticker(_resolve_yf_ticker(ticker)).info
+        return info.get("sector", "")
+    except Exception:
+        return ""
+
+
+def _next_monthly_expiry(min_dte: int = 30) -> str:
+    """Return the next monthly options expiry (3rd Friday) at least min_dte days out."""
+    target = date.today() + timedelta(days=min_dte)
+    # Find 3rd Friday of target month
+    first = target.replace(day=1)
+    # weekday(): Monday=0 … Friday=4
+    days_to_friday = (4 - first.weekday()) % 7
+    third_friday = first + timedelta(days=days_to_friday + 14)
+    if third_friday < target:
+        # Move to next month
+        if target.month == 12:
+            first = target.replace(year=target.year + 1, month=1, day=1)
+        else:
+            first = target.replace(month=target.month + 1, day=1)
+        days_to_friday = (4 - first.weekday()) % 7
+        third_friday = first + timedelta(days=days_to_friday + 14)
+    return third_friday.strftime("%Y-%m-%d")
 
 
 def _run_all_strategies(
@@ -68,6 +103,7 @@ def run_analyze(
     open_orders: list[Order],
     consensus_threshold: int = 3,
     watchlist_consensus_threshold: int = 2,
+    paper_mode: bool = False,
 ) -> ProposalSet:
     """Analyze candidates and produce ranked trade proposals.
 
@@ -93,10 +129,19 @@ def run_analyze(
 
     rf = RiskFilter()
     atr_mult = regime_atr_multiplier(regime)
+
+    # Auto-detect paper mode from config — relaxes bear regime gate
+    if not paper_mode:
+        try:
+            paper_mode = Config().ibkr_mode == "paper"
+        except Exception:
+            pass
     existing_tickers = {p.ticker for p in existing_positions}
     open_order_tickers = {(o.ticker, o.side) for o in open_orders if o.status == "open"}
 
     all_proposals: list[Proposal] = []
+
+    option_expiry = _next_monthly_expiry(min_dte=30)
 
     for sector_name, candidates in cs.sectors.items():
         for candidate in candidates:
@@ -107,8 +152,19 @@ def run_analyze(
             except Exception:
                 continue
 
+            entry_price = float(df["close"].iloc[-1])
+
+            # Skip penny stocks / micro-caps with unreliable signals
+            if entry_price < _MIN_PRICE:
+                continue
+
+            # Enrich sector if missing
+            resolved_sector = candidate.sector or sector_name
+            if not resolved_sector or resolved_sector == "Unknown":
+                resolved_sector = _get_sector(candidate.ticker) or "Unknown"
+
             # Multi-strategy consensus
-            signals = _run_all_strategies(df, candidate.sector)
+            signals = _run_all_strategies(df, resolved_sector)
             buy_count = sum(1 for s in signals.values() if s == 1)
             sell_count = sum(1 for s in signals.values() if s == -1)
 
@@ -140,6 +196,7 @@ def run_analyze(
                 position=None,
                 sentiment=None,
                 regime=regime,
+                paper_mode=paper_mode,
             )
             if filtered["filtered"]:
                 continue
@@ -147,7 +204,6 @@ def run_analyze(
             # Compute ATR, stop, sizing
             try:
                 current_atr = float(compute_atr(df).iloc[-1])
-                entry_price = float(df["close"].iloc[-1])
                 sl = compute_stop(df, entry_price=entry_price, atr_multiplier=atr_mult)
                 qty = compute_position_size(
                     df, entry_price=entry_price,
@@ -160,9 +216,15 @@ def run_analyze(
             if qty <= 0 or entry_price <= 0:
                 continue
 
-            risk_per_share = entry_price - sl if direction_signal == 1 else sl - entry_price
+            # Cap position size at _MAX_POSITION_PCT of NLV
             position_value = entry_price * qty
             pct_of_nlv = (position_value / account_value * 100) if account_value > 0 else 0
+            if pct_of_nlv > _MAX_POSITION_PCT:
+                qty = max(1, int(account_value * _MAX_POSITION_PCT / 100 / entry_price))
+                position_value = entry_price * qty
+                pct_of_nlv = (position_value / account_value * 100) if account_value > 0 else 0
+
+            risk_per_share = entry_price - sl if direction_signal == 1 else sl - entry_price
 
             # Determine direction label and order construction
             if direction_signal == 1:
@@ -180,15 +242,31 @@ def run_analyze(
             else:
                 direction = "hedge"
                 # For bearish plays, propose a put option if it's a stock with options
+                raw_strike = entry_price - current_atr
+                # Round to nearest standard strike increment
+                if raw_strike >= 100:
+                    strike = round(raw_strike)           # $1 increments
+                elif raw_strike >= 25:
+                    strike = round(raw_strike * 2) / 2   # $0.50 increments
+                else:
+                    strike = round(raw_strike * 2) / 2   # $0.50 increments
+                strike = max(strike, 0.50)  # floor strike at $0.50
+                option_qty = max(1, qty // 100)  # option contracts = shares / 100
+                premium_est = round(max(0.05, current_atr * 0.5), 2)
                 order = ProposalOrder(
                     side="buy",
                     order_type="limit",
                     contract_type="option",
-                    qty=max(1, qty // 100),  # option contracts = shares / 100
-                    price=round(current_atr * 0.5, 2),  # rough premium estimate
+                    qty=option_qty,
+                    price=premium_est,
                     right="put",
-                    strike=round(entry_price - current_atr, 2),
+                    strike=strike,
+                    expiry=option_expiry,
                 )
+                # Recalc position value for options (premium × 100 × qty)
+                position_value = premium_est * 100 * option_qty
+                pct_of_nlv = (position_value / account_value * 100) if account_value > 0 else 0
+
                 # For ETFs, use direct sell instead
                 if candidate.asset_class == "etf":
                     order = ProposalOrder(
@@ -198,6 +276,8 @@ def run_analyze(
                         qty=qty,
                         price=round(entry_price, 2),
                     )
+                    position_value = entry_price * qty
+                    pct_of_nlv = (position_value / account_value * 100) if account_value > 0 else 0
 
             # Conviction scoring
             if consensus >= 5:
@@ -230,7 +310,7 @@ def run_analyze(
                 order=order,
                 sizing=sizing,
                 news_context=news_context,
-                sector=sector_name,
+                sector=resolved_sector,
             ))
 
     # Rank proposals: consensus desc, watchlist first, ticker alpha
@@ -262,6 +342,7 @@ def run_analyze(
         run_id=datetime.now(timezone.utc).isoformat(),
         regime=regime,
         available_capital=account_value,
+        geo_context=cs.geo_context,
         sectors=sector_proposals,
     )
 

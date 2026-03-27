@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, json, sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import click
 from trader.adapters.factory import get_adapter
@@ -372,3 +373,60 @@ def from_scan(ctx, scan_type, list_name, replace, market, limit,
         "tickers": _get_tickers(data, list_name),
         "total": len(_get_tickers(data, list_name)),
     })
+
+
+@watchlist.command("prune")
+@click.option("--ttl-days", default=14, type=int, show_default=True,
+              help="Remove discovery tickers older than this many days.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show what would be pruned without modifying.")
+@click.pass_context
+def prune(ctx, ttl_days, dry_run):
+    """
+    Remove stale discovery-added tickers from all watchlists.
+
+    Only removes tickers that have metadata with source='discovery' and
+    added_at older than --ttl-days. User-added tickers (no metadata) are
+    never pruned.
+
+    \b
+    Examples:
+      trader watchlist prune
+      trader watchlist prune --dry-run
+      trader watchlist prune --ttl-days 7
+    """
+    data = _load(ctx)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+    all_pruned: list[str] = []
+
+    for list_name, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        metadata = entry.get("metadata", {})
+        to_remove: list[str] = []
+        for ticker in entry.get("tickers", []):
+            meta = metadata.get(ticker)
+            if meta is None:
+                continue  # user-added, never prune
+            if meta.get("source") != "discovery":
+                continue  # not discovery-sourced, never prune
+            added_at_str = meta.get("added_at")
+            if not added_at_str:
+                continue
+            added_at = datetime.fromisoformat(added_at_str)
+            if added_at < cutoff:
+                to_remove.append(ticker)
+
+        if not dry_run:
+            for ticker in to_remove:
+                entry["tickers"].remove(ticker)
+                metadata.pop(ticker, None)
+                entry.get("sectors", {}).pop(ticker, None)
+
+        all_pruned.extend(to_remove)
+
+    if dry_run:
+        output_json({"would_prune": all_pruned, "ttl_days": ttl_days})
+    else:
+        _save(ctx, data)
+        output_json({"pruned": all_pruned, "ttl_days": ttl_days})

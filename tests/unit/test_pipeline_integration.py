@@ -1,4 +1,5 @@
 """Integration test: discover -> analyze pipeline with mocked external deps."""
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -45,16 +46,16 @@ def test_full_pipeline_discover_then_analyze(tmp_path: Path):
     pipeline_dir = tmp_path / "pipeline"
 
     # Phase 1: Discover -------------------------------------------------------
-    async def mock_scan(scan_type, market, filters, limit):
+    async def mock_scan(scan_type, location, filters, limit):
         return [ScanResult(symbol="CRWD", sector="Technology")]
 
-    candidates = run_discover(
+    candidates = asyncio.run(run_discover(
         regime="bull",
         watchlist_path=wl_path,
         pipeline_dir=pipeline_dir,
         scan_fn=mock_scan,
         news_fn=AsyncMock(return_value=[]),
-    )
+    ))
 
     assert candidates.total_candidates >= 2  # NVDA (watchlist) + CRWD (discovery)
     assert (pipeline_dir / "candidates.json").exists()
@@ -63,6 +64,9 @@ def test_full_pipeline_discover_then_analyze(tmp_path: Path):
     with patch(
         "trader.pipeline.analyze._fetch_ohlcv",
         return_value=_make_ohlcv(trend="up"),
+    ), patch(
+        "trader.pipeline.analyze._get_sector",
+        return_value="Technology",
     ):
         proposals = run_analyze(
             pipeline_dir=pipeline_dir,

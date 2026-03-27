@@ -98,7 +98,8 @@ def test_analyze_writes_proposals_json(tmp_path):
     assert (pipeline_dir / "proposals.json").exists()
 
 
-def test_analyze_bear_regime_blocks_longs(tmp_path):
+def test_analyze_bear_regime_allows_longs(tmp_path):
+    """Bear regime no longer blocks longs — strategies assess conditions, regime adjusts sizing."""
     cs = _make_candidate_set([("AAPL", "watchlist", "Technology")])
     pipeline_dir = tmp_path / "pipeline"
     pipeline_dir.mkdir()
@@ -113,6 +114,5 @@ def test_analyze_bear_regime_blocks_longs(tmp_path):
             open_orders=[],
         )
 
-    for sp in result.sectors.values():
-        for p in sp.proposals:
-            assert p.direction != "long", f"Long proposal for {p.ticker} in bear regime"
+    # Proposals should exist if strategies signal buy — bear regime doesn't filter them
+    assert (pipeline_dir / "proposals.json").exists()

@@ -19,15 +19,16 @@ class RiskFilter:
         ex_div_within_days: int = 5,
         earnings_blackout_days: int = 3,
         regime: str | None = None,
+        paper_mode: bool = False,
     ) -> dict:
         if signal == 0:
             return {"signal": signal, "filtered": False, "filter_reason": None}
 
         is_short = signal == -1
 
-        # Regime gate: block new longs in a confirmed bear market (shorts remain allowed)
-        if regime == "bear" and not is_short:
-            return {"signal": 0, "filtered": True, "filter_reason": "bear_regime"}
+        # Regime awareness: bear regime no longer blocks longs outright.
+        # Strategies already assess conditions; the regime is passed through
+        # so callers (pipeline, agent) can adjust sizing and stops instead.
 
         # Stop-loss breach — only applies to existing long positions
         if not is_short and stop_pct is not None and position is not None and quote is not None and quote.last and position.avg_cost is not None:

@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import signal
+from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
@@ -85,6 +86,13 @@ async def _run() -> None:
     scheduler = build_scheduler()
     scheduler.start()
     log.info("scheduler_ready", job_count=len(scheduler.get_jobs()), mode="paper" if is_paper else "live")
+
+    # Trigger IBKR health check immediately on startup so Playwright auto-authenticates
+    # the gateway without waiting up to 5 minutes for the first scheduled run.
+    hc_job = scheduler.get_job("ibkr-healthcheck")
+    if hc_job:
+        hc_job.modify(next_run_time=datetime.now(timezone.utc))
+        log.info("ibkr_healthcheck_startup_trigger")
 
     # 2. FastAPI
     app = create_app(scheduler=scheduler)

@@ -1,106 +1,65 @@
-"""Markdown → Telegram HTML formatter and conversational message splitter."""
+"""Markdown → Telegram formatter using telegramify-markdown."""
 from __future__ import annotations
 
-import re
+import telegramify_markdown as tgmd
 
-_MAX_CHUNK = 2000  # well under Telegram's 4096 limit; feels conversational
-
-
-# ── Conversion ────────────────────────────────────────────────────────────────
-
-def _escape_html(text: str) -> str:
-    """Escape bare HTML entities outside of tags we'll produce."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+# Telegram message limit in UTF-16 code units (chars for ASCII)
+_MAX_UTF16 = 4000  # stay under Telegram's 4096 limit
 
 
-def to_telegram_html(md: str) -> str:
-    """Convert a markdown string to Telegram-compatible HTML.
+def convert_markdown(md: str) -> list[tuple[str, list]]:
+    """Convert markdown to Telegram-ready (text, entities) chunks.
 
-    Handles: headers, bold, italic, inline code, fenced code blocks,
-    horizontal rules, and bullet lists.  Leaves plain text untouched.
+    Returns a list of (text, entities) tuples ready for
+    bot.send_message(text=text, entities=entities).
     """
-    # 1. Extract fenced code blocks and replace with placeholders so we
-    #    don't mess with their content during the other transformations.
-    blocks: list[str] = []
+    contents = tgmd.convert(md)
+    # convert() returns [Text(content, entities), ...] or similar
+    # Merge into a single (text, entities) then split
+    full_text = ""
+    all_entities = []
+    for item in contents:
+        if hasattr(item, "content") and isinstance(item.content, str):
+            text = item.content
+            if hasattr(item, "__iter__"):
+                # item is (text, entities_list)
+                for sub in item:
+                    if isinstance(sub, list):
+                        # Offset entities by current text length
+                        for ent in sub:
+                            ent.offset += len(full_text.encode("utf-16-le")) // 2
+                            all_entities.append(ent)
+            full_text += text
 
-    def _stash_block(m: re.Match) -> str:
-        lang = (m.group(1) or "").strip()
-        code = _escape_html(m.group(2))
-        tag = f'<pre><code class="language-{lang}">{code}</code></pre>' if lang else f"<pre>{code}</pre>"
-        blocks.append(tag)
-        return f"\x00BLOCK{len(blocks) - 1}\x00"
+    # If entity merging is complex, fall back to markdownify + MarkdownV2
+    if not full_text.strip():
+        md_v2 = tgmd.markdownify(md)
+        return _split_markdownv2(md_v2)
 
-    md = re.sub(r"```(\w*)\n?(.*?)```", _stash_block, md, flags=re.DOTALL)
-
-    # 2. Inline code  (`text`)
-    inline_codes: list[str] = []
-
-    def _stash_inline(m: re.Match) -> str:
-        inline_codes.append(f"<code>{_escape_html(m.group(1))}</code>")
-        return f"\x00INLINE{len(inline_codes) - 1}\x00"
-
-    md = re.sub(r"`([^`\n]+)`", _stash_inline, md)
-
-    # 3. Escape remaining HTML special chars
-    md = _escape_html(md)
-
-    # 4. Headers (## Header → <b>Header</b>) — strip leading #s
-    md = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", md, flags=re.MULTILINE)
-
-    # 5. Bold — **text** or __text__
-    md = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", md)
-    md = re.sub(r"__(.+?)__", r"<b>\1</b>", md)
-
-    # 6. Italic — *text* or _text_ (but not ** or __)
-    md = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", md)
-    md = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", md)
-
-    # 7. Horizontal rules → blank line
-    md = re.sub(r"^[-*_]{3,}\s*$", "", md, flags=re.MULTILINE)
-
-    # 8. Bullet lists: leading `- ` or `* ` → `• `
-    md = re.sub(r"^[\-\*]\s+", "• ", md, flags=re.MULTILINE)
-
-    # 9. Restore placeholders
-    for i, tag in enumerate(blocks):
-        md = md.replace(f"\x00BLOCK{i}\x00", tag)
-    for i, tag in enumerate(inline_codes):
-        md = md.replace(f"\x00INLINE{i}\x00", tag)
-
-    return md.strip()
+    return tgmd.split_entities(full_text, all_entities, _MAX_UTF16)
 
 
-# ── Splitting ─────────────────────────────────────────────────────────────────
+def to_markdownv2(md: str) -> str:
+    """Convert markdown to Telegram MarkdownV2 string."""
+    return tgmd.markdownify(md)
 
-def split_for_telegram(text: str, max_chars: int = _MAX_CHUNK) -> list[str]:
-    """Split HTML text into conversational chunks ≤ max_chars.
 
-    Splits preferring paragraph boundaries (double newline), then single
-    newlines, then hard-cuts at max_chars.  Never splits inside a <pre> block.
-    """
+def split_for_telegram(md_v2: str, max_chars: int = _MAX_UTF16) -> list[str]:
+    """Split a MarkdownV2 string into chunks ≤ max_chars."""
+    return _split_markdownv2(md_v2, max_chars)
+
+
+def _split_markdownv2(text: str, max_chars: int = _MAX_UTF16) -> list[str]:
+    """Split MarkdownV2 text into chunks at paragraph/line boundaries."""
     chunks: list[str] = []
     remaining = text.strip()
 
     while len(remaining) > max_chars:
-        # Avoid splitting inside a <pre> block
-        pre_start = remaining.find("<pre")
-        pre_end = remaining.find("</pre>")
-        if 0 <= pre_start < max_chars <= pre_end:
-            # The <pre> straddles the limit — push the whole block as one chunk
-            # and continue with the rest.
-            end = pre_end + len("</pre>")
-            chunk, remaining = remaining[:end], remaining[end:].lstrip("\n")
-            if chunk.strip():
-                chunks.append(chunk.strip())
-            continue
-
         # Prefer paragraph break
         split_at = remaining.rfind("\n\n", 0, max_chars)
         if split_at == -1:
-            # Fall back to single newline
             split_at = remaining.rfind("\n", 0, max_chars)
         if split_at == -1:
-            # Hard cut
             split_at = max_chars
 
         chunk, remaining = remaining[:split_at], remaining[split_at:].lstrip("\n")

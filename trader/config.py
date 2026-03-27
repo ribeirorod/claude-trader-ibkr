@@ -7,7 +7,7 @@ load_dotenv()
 
 @dataclass
 class Config:
-    ib_host: str = field(default_factory=lambda: os.getenv("IB_HOST", "127.0.0.1"))
+    ib_host: str = field(default_factory=lambda: os.getenv("IB_HOST", "localhost"))
     ib_port: int = field(default_factory=lambda: int(os.getenv("IB_PORT", "5001")))
     ibkr_mode: str = field(default_factory=lambda: os.getenv("IBKR_MODE", "paper"))
     ib_account: str = field(default_factory=lambda: os.getenv("IB_ACCOUNT", ""))

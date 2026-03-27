@@ -18,10 +18,20 @@ class Candidate(BaseModel):
     news: list[CandidateNews] = []
 
 
+class GeoContext(BaseModel):
+    """Geopolitical / macro context surfaced during discovery."""
+    severity: str = "none"  # "high" | "medium" | "low" | "none"
+    events: list[str] = []
+    affected_sectors: list[str] = []
+    block_new_longs: bool = False
+    hedge_suggested: bool = False
+
+
 class CandidateSet(BaseModel):
     run_id: str
     regime: str
     sectors: dict[str, list[Candidate]]
+    geo_context: GeoContext = GeoContext()
 
     @computed_field
     @property
@@ -86,6 +96,7 @@ class ProposalSet(BaseModel):
     run_id: str
     regime: str
     available_capital: float = 0.0
+    geo_context: GeoContext = GeoContext()
     sectors: dict[str, SectorProposals] = {}
 
     @computed_field

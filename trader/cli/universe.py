@@ -6,10 +6,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import logging
+
 import click
 
 from trader.adapters.factory import get_adapter
 from trader.cli.__main__ import output_json
+
+logger = logging.getLogger(__name__)
 
 # Same ROOT convention as trader/server/agent.py
 _ROOT = Path(__file__).resolve().parent.parent.parent
@@ -30,21 +34,25 @@ _SCAN_CONFIGS: dict[str, list[dict]] = {
          "filters": []},
     ],
     "eu": [
-        {"scan": "HIGH_VS_52W_HL",  "market": "STK.EU.MAJOR", "limit": 15,
+        {"scan": "HIGH_VS_52W_HL",  "market": "STK.EU.IBIS", "limit": 15,
          "filters": [{"code": "curEMA200Above", "value": 1}]},
-        {"scan": "TOP_PERC_GAIN",   "market": "STK.EU.MAJOR", "limit": 15,
+        {"scan": "TOP_PERC_GAIN",   "market": "STK.EU.IBIS", "limit": 15,
+         "filters": []},
+        {"scan": "TOP_PERC_GAIN",   "market": "STK.EU.AEB", "limit": 10,
+         "filters": []},
+        {"scan": "MOST_ACTIVE",     "market": "STK.EU.LSE", "limit": 10,
          "filters": []},
     ],
     "etf": [
-        {"scan": "MOST_ACTIVE",    "market": "ETF.EU.MAJOR", "limit": 20,
+        {"scan": "MOST_ACTIVE",    "market": "ETF.EQ.US.MAJOR", "limit": 20,
          "filters": []},
-        {"scan": "HIGH_VS_52W_HL", "market": "ETF.EU.MAJOR", "limit": 10,
+        {"scan": "HIGH_VS_52W_HL", "market": "ETF.EQ.US.MAJOR", "limit": 10,
          "filters": []},
     ],
     "options": [
-        {"scan": "HIGH_OPT_IMP_VOLAT",           "market": "OPT.US.MAJOR", "limit": 10,
+        {"scan": "HIGH_OPT_IMP_VOLAT",           "market": "STK.US.MAJOR", "limit": 10,
          "filters": []},
-        {"scan": "LOW_OPT_VOLUME_PUT_CALL_RATIO", "market": "OPT.US.MAJOR", "limit": 10,
+        {"scan": "LOW_OPT_VOLUME_PUT_CALL_RATIO", "market": "STK.US.MAJOR", "limit": 10,
          "filters": []},
     ],
 }
@@ -86,7 +94,8 @@ async def _run_scan(adapter, scan_type: str, market: str,
     """Run one IBKR scanner. Caller owns adapter connect/disconnect lifecycle."""
     try:
         return await adapter.scan(scan_type, market, filters or None, limit)
-    except Exception:
+    except Exception as exc:
+        logger.warning("scan %s on %s failed: %s", scan_type, market, exc)
         return []
 
 
@@ -131,7 +140,7 @@ def refresh(ctx, market):
     adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
     data = _load()
 
-    async def run_all() -> dict[str, int]:
+    async def run_all() -> tuple[dict[str, int], dict[str, list[str]]]:
         # Single connect/disconnect for all scans — matches watchlist.py pattern.
         # _run_scan must NOT manage adapter lifecycle; a closed httpx client
         # cannot be reopened and would silently return [] on every subsequent scan.
@@ -139,11 +148,15 @@ def refresh(ctx, market):
         try:
             now = datetime.now(timezone.utc).isoformat()
             counts: dict[str, int] = {}
+            errors: dict[str, list[str]] = {}
             for seg in segments:
                 tickers_seen: dict[str, dict] = {}
+                seg_errors: list[str] = []
                 for cfg in _SCAN_CONFIGS[seg]:
                     results = await _run_scan(adapter, cfg["scan"], cfg["market"],
                                               cfg["filters"], cfg["limit"])
+                    if not results:
+                        seg_errors.append(f"{cfg['scan']}@{cfg['market']}")
                     score = _SCAN_SCORES.get(cfg["scan"], 40)
                     exchange = cfg["market"].split(".")[-1]
                     for r in results:
@@ -162,13 +175,18 @@ def refresh(ctx, market):
                 data[_SEGMENT_DATA_KEY[seg]] = segment_list
                 data[_SEGMENT_TS_KEY[seg]] = now
                 counts[seg] = len(segment_list)
+                if seg_errors:
+                    errors[seg] = seg_errors
             _save(data)
-            return counts
+            return counts, errors
         finally:
             try:
                 await adapter.disconnect()
             except Exception:
                 pass
 
-    counts = asyncio.run(run_all())
-    output_json({"refreshed": counts, "universe_path": str(_universe_path()), **data})
+    counts, errors = asyncio.run(run_all())
+    result = {"refreshed": counts, "universe_path": str(_universe_path()), **data}
+    if errors:
+        result["scan_errors"] = errors
+    output_json(result)

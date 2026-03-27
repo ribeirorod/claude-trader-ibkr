@@ -155,7 +155,8 @@ def test_buy_suppressed_when_position_limit_reached():
     assert result["filter_reason"] == "position_limit"
 
 
-def test_buy_blocked_in_bear_regime():
+def test_buy_allowed_in_bear_regime():
+    """Bear regime no longer blocks longs — strategies assess conditions, regime adjusts sizing."""
     rf = RiskFilter()
     result = rf.filter(
         signal=1,
@@ -164,9 +165,8 @@ def test_buy_blocked_in_bear_regime():
         sentiment=None,
         regime="bear",
     )
-    assert result["signal"] == 0
-    assert result["filtered"] is True
-    assert result["filter_reason"] == "bear_regime"
+    assert result["signal"] == 1
+    assert result["filtered"] is False
 
 
 def test_buy_passes_in_bull_regime():

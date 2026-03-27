@@ -133,5 +133,11 @@ cli.add_command(universe)
 from trader.cli.market import market
 cli.add_command(market)
 
+from trader.cli.pipeline import pipeline
+cli.add_command(pipeline)
+
+from trader.cli.notify import notify
+cli.add_command(notify)
+
 if __name__ == "__main__":
     cli()

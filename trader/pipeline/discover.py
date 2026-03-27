@@ -10,40 +10,58 @@ from pathlib import Path
 from typing import Callable
 
 from trader.models import ScanResult
-from trader.pipeline.models import Candidate, CandidateNews, CandidateSet
+from trader.pipeline.models import Candidate, CandidateNews, CandidateSet, GeoContext
 
 
 # ---------------------------------------------------------------------------
 # Scan configurations per regime
 # ---------------------------------------------------------------------------
 
-_COMMON_FILTERS = {
-    "price_above": 5,
-    "vol_above": 200_000,
-    "mktcap_above": 300_000_000,
-}
+_COMMON_FILTERS: list[dict] = [
+    {"code": "priceAbove", "value": 5},
+    {"code": "volumeAbove", "value": 200_000},
+    {"code": "marketCapAbove1e6", "value": 300},  # IBKR uses millions
+]
+
+_ETF_FILTERS: list[dict] = [
+    {"code": "volumeAbove", "value": 500_000},
+]
 
 _BULL_SCANS: list[dict] = [
-    {"scan_type": "HIGH_VS_52W_HL", "market": "STK.US.MAJOR", "filters": {**_COMMON_FILTERS, "ema200_above": True}, "limit": 25},
-    {"scan_type": "TOP_PERC_GAIN", "market": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
-    {"scan_type": "MOST_ACTIVE", "market": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
+    {"scan_type": "HIGH_VS_52W_HL", "location": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
+    {"scan_type": "TOP_PERC_GAIN", "location": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
+    {"scan_type": "MOST_ACTIVE", "location": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
 ]
 
 _BEARISH_SCANS: list[dict] = [
-    {"scan_type": "TOP_PERC_LOSE", "market": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
-    {"scan_type": "HIGH_OPT_IMP_VOLAT", "market": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
-    {"scan_type": "HIGH_PUT_CALL_RATIO", "market": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
+    {"scan_type": "TOP_PERC_LOSE", "location": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
+    {"scan_type": "HIGH_OPT_IMP_VOLAT", "location": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
+    {"scan_type": "HIGH_OPT_VOLUME_PUT_CALL_RATIO", "location": "STK.US.MAJOR", "filters": _COMMON_FILTERS, "limit": 25},
+]
+
+# EU equity scans — Frankfurt (IBIS), Amsterdam (AEB), London (LSE)
+_EU_BULL_SCANS: list[dict] = [
+    {"scan_type": "TOP_PERC_GAIN", "location": "STK.EU.IBIS", "filters": _COMMON_FILTERS, "limit": 20},
+    {"scan_type": "MOST_ACTIVE", "location": "STK.EU.IBIS", "filters": _COMMON_FILTERS, "limit": 20},
+    {"scan_type": "TOP_PERC_GAIN", "location": "STK.EU.AEB", "filters": _COMMON_FILTERS, "limit": 15},
+    {"scan_type": "MOST_ACTIVE", "location": "STK.EU.LSE", "filters": _COMMON_FILTERS, "limit": 15},
+]
+
+_EU_BEARISH_SCANS: list[dict] = [
+    {"scan_type": "TOP_PERC_LOSE", "location": "STK.EU.IBIS", "filters": _COMMON_FILTERS, "limit": 20},
+    {"scan_type": "TOP_PERC_LOSE", "location": "STK.EU.AEB", "filters": _COMMON_FILTERS, "limit": 15},
+    {"scan_type": "TOP_PERC_LOSE", "location": "STK.EU.LSE", "filters": _COMMON_FILTERS, "limit": 15},
 ]
 
 _ETF_SCANS: list[dict] = [
-    {"scan_type": "MOST_ACTIVE", "market": "ETF.US", "filters": {"vol_above": 500_000}, "limit": 15},
-    {"scan_type": "TOP_PERC_GAIN", "market": "ETF.US", "filters": {"vol_above": 500_000}, "limit": 15},
+    {"scan_type": "MOST_ACTIVE", "location": "ETF.EQ.US", "filters": _ETF_FILTERS, "limit": 15},
+    {"scan_type": "TOP_PERC_GAIN", "location": "ETF.EQ.US", "filters": _ETF_FILTERS, "limit": 15},
 ]
 
 _REGIME_SCAN_MAP: dict[str, list[dict]] = {
-    "bull": _BULL_SCANS + [_BEARISH_SCANS[1]] + _ETF_SCANS,  # high IV for hedging
-    "caution": _BULL_SCANS + _BEARISH_SCANS + _ETF_SCANS,
-    "bear": [_BULL_SCANS[2]] + _BEARISH_SCANS + _ETF_SCANS,  # most active only
+    "bull": _BULL_SCANS + _EU_BULL_SCANS + [_BEARISH_SCANS[1]] + _ETF_SCANS,
+    "caution": _BULL_SCANS + _EU_BULL_SCANS + _BEARISH_SCANS + _EU_BEARISH_SCANS + _ETF_SCANS,
+    "bear": [_BULL_SCANS[2]] + _BEARISH_SCANS + _EU_BEARISH_SCANS + _ETF_SCANS,
 }
 
 
@@ -92,7 +110,7 @@ async def _run_all_scans(
     tasks = [
         scan_fn(
             scan_type=s["scan_type"],
-            market=s["market"],
+            location=s["location"],
             filters=s["filters"],
             limit=s["limit"],
         )
@@ -105,7 +123,7 @@ async def _run_all_scans(
         if isinstance(results, BaseException):
             continue
         all_candidates.extend(
-            _scan_results_to_candidates(results, scan_cfg["scan_type"], scan_cfg["market"])
+            _scan_results_to_candidates(results, scan_cfg["scan_type"], scan_cfg["location"])
         )
     return all_candidates
 
@@ -194,17 +212,93 @@ async def _enrich_with_news(
 
 
 # ---------------------------------------------------------------------------
+# Geopolitical / macro context
+# ---------------------------------------------------------------------------
+
+_GEO_TICKERS = ["SPY", "QQQ", "GLD", "TLT", "VIX", "DXY"]
+_GEO_KEYWORDS_HIGH = ["war", "invasion", "sanctions", "nuclear", "default", "crash", "collapse"]
+_GEO_KEYWORDS_MEDIUM = ["tariff", "trade war", "fed rate", "recession", "geopolitical", "conflict",
+                         "escalation", "embargo", "crisis", "shutdown"]
+_SECTOR_KEYWORDS = {
+    "energy": ["oil", "opec", "energy", "crude", "gas", "pipeline"],
+    "semiconductors": ["chip", "semiconductor", "tsmc", "nvidia", "export ban"],
+    "defense": ["defense", "military", "nato", "missile", "arms"],
+    "finance": ["bank", "fed", "rate", "yield", "treasury", "credit"],
+    "technology": ["tech", "ai", "regulation", "antitrust", "big tech"],
+}
+
+
+async def _scan_geo_context(news_fn: Callable) -> GeoContext:
+    """Scan macro/geopolitical news headlines and return a GeoContext."""
+    try:
+        items = await news_fn(tickers=_GEO_TICKERS, limit=10)
+    except Exception:
+        return GeoContext()
+
+    if not items:
+        return GeoContext()
+
+    events: list[str] = []
+    affected: set[str] = set()
+    high_count = 0
+    medium_count = 0
+
+    for item in items:
+        text = (item.headline + " " + getattr(item, "summary", "")).lower()
+        for kw in _GEO_KEYWORDS_HIGH:
+            if kw in text:
+                high_count += 1
+                events.append(item.headline)
+                break
+        else:
+            for kw in _GEO_KEYWORDS_MEDIUM:
+                if kw in text:
+                    medium_count += 1
+                    events.append(item.headline)
+                    break
+
+        for sector, keywords in _SECTOR_KEYWORDS.items():
+            if any(kw in text for kw in keywords):
+                affected.add(sector)
+
+    # Deduplicate events
+    seen: set[str] = set()
+    unique_events: list[str] = []
+    for e in events:
+        if e not in seen:
+            seen.add(e)
+            unique_events.append(e)
+
+    if high_count >= 2:
+        severity = "high"
+    elif high_count >= 1 or medium_count >= 3:
+        severity = "medium"
+    elif medium_count >= 1:
+        severity = "low"
+    else:
+        severity = "none"
+
+    return GeoContext(
+        severity=severity,
+        events=unique_events[:5],
+        affected_sectors=sorted(affected),
+        block_new_longs=severity == "high",
+        hedge_suggested=severity in ("high", "medium"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_discover(
+async def run_discover(
     regime: str,
     watchlist_path: Path,
     pipeline_dir: Path,
     scan_fn: Callable,
     news_fn: Callable,
 ) -> CandidateSet:
-    """Run the full discovery pipeline synchronously.
+    """Run the full discovery pipeline.
 
     Parameters
     ----------
@@ -215,7 +309,7 @@ def run_discover(
     pipeline_dir : Path
         Directory to write candidates.json into.
     scan_fn : Callable
-        async (scan_type, market, filters, limit) -> list[ScanResult]
+        async (scan_type, location, filters, limit) -> list[ScanResult]
     news_fn : Callable
         async (tickers, limit) -> list[NewsItem]
     """
@@ -233,31 +327,20 @@ def run_discover(
         for ticker, sector in wl_tickers.items()
     ]
 
-    # 2. Run regime-aware scans (async under the hood)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    async def _async_pipeline() -> dict[str, list[Candidate]]:
-        scan_candidates = await _run_all_scans(regime, scan_fn)
-        sectors = _merge_candidates(watchlist_candidates, scan_candidates)
-        sectors = await _enrich_with_news(sectors, news_fn)
-        return sectors
-
-    if loop and loop.is_running():
-        # Already in an async context — use nest_asyncio or run in thread
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            sectors = pool.submit(lambda: asyncio.run(_async_pipeline())).result()
-    else:
-        sectors = asyncio.run(_async_pipeline())
+    # 2. Run regime-aware scans + geo context in parallel
+    scan_candidates, geo_context = await asyncio.gather(
+        _run_all_scans(regime, scan_fn),
+        _scan_geo_context(news_fn),
+    )
+    sectors = _merge_candidates(watchlist_candidates, scan_candidates)
+    sectors = await _enrich_with_news(sectors, news_fn)
 
     # 3. Build CandidateSet
     candidate_set = CandidateSet(
         run_id=run_id,
         regime=regime,
         sectors=sectors,
+        geo_context=geo_context,
     )
 
     # 4. Write candidates.json

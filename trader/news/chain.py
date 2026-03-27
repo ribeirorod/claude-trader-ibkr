@@ -1,7 +1,10 @@
 # trader/news/chain.py
 from __future__ import annotations
+import logging
 from trader.models import NewsItem
 from trader.news.base import NewsProvider
+
+logger = logging.getLogger(__name__)
 
 
 def is_stub(items: list[NewsItem], tickers: list[str]) -> bool:
@@ -45,13 +48,22 @@ class NewsProviderChain(NewsProvider):
         self.providers = providers
 
     async def get_news(self, tickers: list[str], limit: int = 10) -> list[NewsItem]:
+        if not self.providers:
+            logger.warning("NewsProviderChain: no providers configured (check API keys)")
+            return []
         for provider in self.providers:
+            name = type(provider).__name__
             try:
                 items = await provider.get_news(tickers, limit)
-            except Exception:
+            except Exception as exc:
+                logger.warning("NewsProviderChain: %s failed (%s), trying next", name, exc)
                 continue
-            if not is_stub(items, tickers):
-                return items
+            if is_stub(items, tickers):
+                logger.info("NewsProviderChain: %s returned stub, trying next", name)
+                continue
+            logger.info("NewsProviderChain: %s returned %d items", name, len(items))
+            return items
+        logger.warning("NewsProviderChain: all providers exhausted, returning []")
         return []
 
     async def aclose(self) -> None:

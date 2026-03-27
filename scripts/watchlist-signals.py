@@ -41,10 +41,23 @@ WATCHLISTS_PATH = ROOT / "outputs" / "watchlists.json"
 
 
 def _load_watchlists() -> dict[str, list[str]]:
-    """Load all watchlists. Returns {} if file is missing."""
+    """Load all watchlists. Returns {} if file is missing.
+
+    Handles both flat format {"name": ["T1", "T2"]} and nested format
+    {"name": {"tickers": ["T1", "T2"], "sectors": {...}}}.
+    """
     if not WATCHLISTS_PATH.exists():
         return {}
-    return json.loads(WATCHLISTS_PATH.read_text())
+    raw = json.loads(WATCHLISTS_PATH.read_text())
+    out: dict[str, list[str]] = {}
+    for name, val in raw.items():
+        if isinstance(val, list):
+            out[name] = val
+        elif isinstance(val, dict):
+            out[name] = val.get("tickers", [])
+        else:
+            log.warning("skipping watchlist %s — unexpected type %s", name, type(val))
+    return out
 
 
 def _run_signals(tickers: list[str]) -> list[dict]:
@@ -85,7 +98,7 @@ def _fmt_signal_row(r: dict) -> str:
     sent = r.get("sentiment_score")  # field name matches CLI JSON output exactly
     sent_str = f"  sentiment {sent:+.2f}" if sent is not None else ""
     filtered = r.get("filtered", False)
-    filter_reason_safe = r.get("filter_reason", "").replace("_", "\\_")
+    filter_reason_safe = (r.get("filter_reason") or "").replace("_", "\\_")
     filter_str = f"  [{filter_reason_safe}]" if filtered else ""
     return f"{label:<4} {ticker:<7} {strategy} {arrow}{sent_str}{filter_str}"
 

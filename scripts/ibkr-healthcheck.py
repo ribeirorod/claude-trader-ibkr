@@ -53,7 +53,8 @@ TICKLE_ENDPOINT = f"{GATEWAY_URL}/v1/api/tickle"
 STATE_FILE = ROOT / ".trader" / "ibkr-health.state"
 # Failure counter — triggers full gateway restart after threshold
 FAILURE_COUNT_FILE = ROOT / ".trader" / "ibkr-health-failures.txt"
-GATEWAY_RESTART_THRESHOLD = 20  # 20 × 5 min = 100 min of consecutive failures
+GATEWAY_RESTART_THRESHOLD = 20  # 20 × 5 min = 100 min of consecutive failures (host only)
+DOCKER_REAUTH_RETRY_THRESHOLD = 3  # In Docker: restart gateway after 3 failed reauths (15 min)
 
 
 def _ssl_ctx() -> ssl.SSLContext:
@@ -115,6 +116,11 @@ def set_failure_count(n: int) -> None:
     FAILURE_COUNT_FILE.write_text(str(n))
 
 
+def _in_docker() -> bool:
+    """True when running inside a Docker container."""
+    return Path("/.dockerenv").exists()
+
+
 def _tmux_session_exists(name: str) -> bool:
     result = subprocess.run(
         ["tmux", "has-session", "-t", name],
@@ -124,18 +130,39 @@ def _tmux_session_exists(name: str) -> bool:
 
 
 def trigger_gateway_restart() -> None:
-    """Restart the IBKR Client Portal Gateway in a persistent tmux session.
+    """Handle a gateway that has been unreachable for 100+ minutes.
 
-    Always checks `tmux ls` first to avoid duplicate sessions.
-    Kills stale ibkr-gateway session only when the gateway is confirmed unreachable.
+    In Docker: the gateway container is managed by Docker's restart policy —
+    send a Telegram alert and let Docker handle it.
+    On host: kill and recreate the tmux session running run.sh.
     """
+    mode_label = "📄 Paper" if IBKR_MODE == "paper" else "💼 Live"
+
+    if _in_docker():
+        log.warning("ibkr_gateway_restarting_docker")
+        # In Docker we can reach the gateway container's health endpoint.
+        # The gateway container has restart: unless-stopped, so killing the
+        # JVM process inside it will trigger Docker to restart it.
+        # We use the /shutdown endpoint if available, otherwise just let
+        # the next reauth cycle handle a fresh gateway.
+        try:
+            req = urllib.request.Request(f"{GATEWAY_URL}/v1/api/logout", method="POST")
+            urllib.request.urlopen(req, timeout=5, context=_ssl_ctx())
+        except Exception:
+            pass  # Best effort — gateway may already be unresponsive
+        send_telegram(
+            f"🔄 <b>IBKR gateway restarting</b> — {mode_label}\n\n"
+            "Sent logout to force session reset. Reauth will run on next cycle."
+        )
+        return
+
+    # Host path: restart via tmux
     gateway_dir = ROOT / "clientportal.gw"
     run_sh = gateway_dir / "bin" / "run.sh"
     if not run_sh.exists():
         log.warning("clientportal.gw/bin/run.sh not found — skipping gateway restart.")
         return
 
-    # Log all current tmux sessions for diagnostics
     result = subprocess.run(["tmux", "ls"], capture_output=True, text=True)
     log.info("tmux_sessions", sessions=result.stdout.strip() or "(none)")
 
@@ -149,7 +176,6 @@ def trigger_gateway_restart() -> None:
         "tmux", "send-keys", "-t", "ibkr-gateway",
         f"cd '{gateway_dir}' && bash bin/run.sh root/conf.yaml", "Enter",
     ])
-    mode_label = "📄 Paper" if IBKR_MODE == "paper" else "💼 Live"
     send_telegram(
         f"🔄 <b>IBKR gateway restarting</b> — {mode_label}\n\n"
         "Session was down 100+ min. Restarting via <code>clientportal.gw/bin/run.sh</code>.\n"
@@ -159,11 +185,22 @@ def trigger_gateway_restart() -> None:
 
 
 def trigger_reauth() -> None:
-    """Launch ibkr-start.sh --auth-only in the background.
+    """Trigger Playwright re-authentication.
 
-    Uses ibkr-start.sh (not ibkr-reauth.py directly) so that the protected
-    process list is always checked and the gateway process is never disrupted.
+    In Docker: call ibkr-reauth.py directly (no tmux available).
+    On host:   launch ibkr-start.sh --auth-only so protected-process checks run.
     """
+    if _in_docker():
+        reauth_script = ROOT / "scripts" / "ibkr-reauth.py"
+        log.info("ibkr_reauth_triggering_docker")
+        subprocess.Popen(
+            [sys.executable, str(reauth_script)],
+            cwd=str(ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+
     start_script = ROOT / "scripts" / "ibkr-start.sh"
     if not start_script.exists():
         log.warning("ibkr-start.sh not found — skipping auto-reauth.")
@@ -193,10 +230,13 @@ def main() -> None:
     # Not authenticated — track consecutive failures
     failures = get_failure_count() + 1
     set_failure_count(failures)
-    log.warning("ibkr_session_not_authenticated", consecutive_failures=failures, threshold=GATEWAY_RESTART_THRESHOLD)
 
-    # After threshold: full gateway restart
-    if failures >= GATEWAY_RESTART_THRESHOLD:
+    # In Docker: use a faster escalation path
+    restart_threshold = DOCKER_REAUTH_RETRY_THRESHOLD if _in_docker() else GATEWAY_RESTART_THRESHOLD
+    log.warning("ibkr_session_not_authenticated", consecutive_failures=failures, threshold=restart_threshold)
+
+    # After threshold: gateway restart (logout + let Docker restart, or tmux restart)
+    if failures >= restart_threshold:
         log.warning("ibkr_gateway_restart_threshold_reached", failures=failures)
         set_failure_count(0)
         set_alert_state("ok")  # Reset so next failure re-alerts cleanly
@@ -204,7 +244,13 @@ def main() -> None:
         return
 
     if last_alert_state() == "alerted":
-        log.info("ibkr_alert_already_sent", action="skipping_duplicate")
+        if IBKR_MODE == "paper":
+            # Paper: silently retry reauth each cycle (no MFA needed)
+            log.info("ibkr_reauth_retry", attempt=failures)
+            trigger_reauth()
+        else:
+            # Live: do NOT retry — wait for user to send /reauth
+            log.info("ibkr_waiting_for_user_reauth", attempt=failures)
         return
 
     log.warning("ibkr_alert_sending", mode=IBKR_MODE)
@@ -218,9 +264,8 @@ def main() -> None:
     else:
         msg = (
             f"🔴 <b>IBKR session lost</b> — {mode_label}\n\n"
-            "Attempting to reconnect...\n\n"
-            "⚠️ <b>Get ready to provide your authenticator code.</b>\n"
-            "<i>You will receive a follow-up message requesting it shortly.</i>"
+            "Session expired. <b>Send /reauth when you are ready</b> to provide your MFA code.\n\n"
+            "<i>No automatic retries — waiting for your command.</i>"
         )
     ok = send_telegram(msg)
     if ok:
@@ -229,7 +274,9 @@ def main() -> None:
     else:
         log.error("ibkr_alert_failed")
 
-    trigger_reauth()
+    # Only auto-trigger reauth in paper mode (no MFA needed)
+    if IBKR_MODE == "paper":
+        trigger_reauth()
 
 
 if __name__ == "__main__":
