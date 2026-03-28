@@ -1,8 +1,11 @@
 # Trader — Agent-First Trading CLI
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/ribeirorod/claude-trader-ibkr/actions/workflows/ci.yml/badge.svg)](https://github.com/ribeirorod/claude-trader-ibkr/actions/workflows/ci.yml)
+
 A headless trading CLI for stocks, ETFs, and options via Interactive Brokers. Designed for AI agent consumption — all output is JSON, all commands are self-documenting via `--help`.
 
-An autonomous portfolio conductor runs on a cron schedule, dispatching specialist agents that assess market conditions, manage risk, and execute trades — all without manual intervention.
+An autonomous portfolio conductor runs on a cron schedule, dispatching specialist agents (powered by Claude) that assess market conditions, manage risk, and execute trades — all without manual intervention.
 
 ---
 
@@ -159,6 +162,22 @@ uv run trader strategies run AAPL --strategy rsi
 uv run trader strategies signals --tickers AAPL MSFT TSLA --strategy macd
 uv run trader strategies backtest AAPL --strategy rsi --from 2025-01-01
 uv run trader strategies optimize AAPL --strategy rsi
+
+# Watchlists
+uv run trader watchlist show
+uv run trader watchlist add NVDA --list momentum
+uv run trader watchlist remove NVDA --list momentum
+uv run trader watchlist prune              # remove tickers with no buy signal
+
+# Universe (IBKR scanner cache)
+uv run trader universe show
+uv run trader universe refresh --market us
+uv run trader universe refresh --market all
+
+# Pipeline (discover → analyze → execute)
+uv run trader pipeline discover            # scan markets + watchlists → candidates.json
+uv run trader pipeline analyze             # multi-strategy consensus → proposals.json
+uv run trader pipeline execute --dry-run   # place orders (or preview with --dry-run)
 ```
 
 All commands support `--help` for full options.
@@ -286,3 +305,13 @@ See [docs/docker-auth.md](docs/docker-auth.md) for Claude OAuth token setup.
 **Scanner returns 0 results for EU/ETF/options** — Check `uv run trader universe refresh --market all` output for `scan_errors`. The IBKR scanner requires specific exchange location codes (e.g., `STK.EU.IBIS`, not `STK.EU.MAJOR`).
 
 **`Not logged in` in Telegram** — Claude OAuth token expired. Re-run `claude setup-token` on the host, update `.env`, then `docker compose up -d trader`. See [docs/docker-auth.md](docs/docker-auth.md).
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). PRs require 1 approving review. Use [Conventional Commits](https://www.conventionalcommits.org/) — releases are tagged automatically on merge to `main`.
+
+## License
+
+[MIT](LICENSE)
