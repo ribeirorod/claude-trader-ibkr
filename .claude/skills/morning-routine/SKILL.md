@@ -163,14 +163,22 @@ Optionally also run MACD for confirmation on top opportunities:
 uv run trader strategies signals --tickers TOP_3_TICKERS --strategy macd --with-news
 ```
 
+Also run pullback strategy for directional short/long setups with options overlay:
+```bash
+uv run trader strategies signals --tickers WATCHLIST_TICKERS --strategy pullback --with-options
+```
+
 For each ticker, capture:
 - Signal: `buy` | `sell` | `hold` | `neutral`
 - RSI value
+- Pullback signal and confidence (if non-zero, note the options recommendation)
 - Confirmation from news sentiment (Step 5)
 
 **Signal scoring** (for ranking opportunities):
 - RSI buy signal + Bullish sentiment + No negative catalyst = **Strong Long** (+2)
 - RSI buy signal + Neutral sentiment = **Moderate Long** (+1)
+- Pullback -1 signal + Bearish sentiment + Negative catalyst = **Strong Short via Puts** (-2)
+- Pullback +1 signal + Bullish sentiment = **Pullback Buy** (+1.5)
 - RSI sell signal + Bearish sentiment + Negative catalyst = **Strong Short** (-2)
 - Conflicting signals = **No Trade** (0)
 
@@ -316,7 +324,8 @@ RISK MODE:      [NORMAL / ELEVATED]
 | Geopolitical scan | `geopolitical-influence` skill |
 | News digest | `uv run trader news latest --tickers WATCHLIST --limit 20` |
 | Sentiment | `uv run trader news sentiment TICKER --lookback 24h` |
-| Signals | `uv run trader strategies signals --tickers WATCHLIST --strategy rsi --with-news` |
+| RSI Signals | `uv run trader strategies signals --tickers WATCHLIST --strategy rsi --with-news` |
+| Pullback + Options | `uv run trader strategies signals --tickers WATCHLIST --strategy pullback --with-options` |
 | Portfolio | `uv run trader positions list && uv run trader positions pnl` |
 | Open orders | `uv run trader orders list --status open` |
 

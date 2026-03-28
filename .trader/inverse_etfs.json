@@ -1,0 +1,65 @@
+{
+  "_doc": "UCITS inverse ETFs for portfolio hedging. All listed on LSE/XETRA — use short ticker form with CLI. Maps underlying index/sector to inverse ETF ticker.",
+  "_updated": "2026-03-25",
+  "index_hedges": {
+    "SP500": {
+      "ticker": "XISX",
+      "name": "Xtrackers S&P 500 Inverse Daily Swap UCITS ETF",
+      "exchange": "XETRA",
+      "leverage": -1,
+      "ter": 0.50,
+      "note": "Daily reset — best for short-term hedges (days to weeks)"
+    },
+    "NASDAQ100": {
+      "ticker": "SQQQ",
+      "name": "WisdomTree NASDAQ 100 3x Daily Short",
+      "exchange": "LSE",
+      "leverage": -3,
+      "ter": 0.75,
+      "note": "3x leverage — use small size, short duration only"
+    },
+    "EUROSTOXX50": {
+      "ticker": "SEU5",
+      "name": "Xtrackers Euro Stoxx 50 Short Daily Swap UCITS ETF",
+      "exchange": "XETRA",
+      "leverage": -1,
+      "ter": 0.40,
+      "note": "EU broad market inverse"
+    },
+    "FTSE100": {
+      "ticker": "SUK2",
+      "name": "Xtrackers FTSE 100 Short Daily Swap UCITS ETF",
+      "exchange": "LSE",
+      "leverage": -1,
+      "ter": 0.50,
+      "note": "UK market inverse"
+    }
+  },
+  "sector_hedges": {
+    "semiconductors": {
+      "ticker": "XSPS",
+      "name": "Xtrackers S&P 500 Inverse Daily Swap UCITS ETF",
+      "note": "No pure semi inverse UCITS exists — use SP500 inverse as proxy",
+      "leverage": -1
+    },
+    "energy": {
+      "ticker": "XISX",
+      "name": "Xtrackers S&P 500 Inverse Daily Swap UCITS ETF",
+      "note": "No pure energy inverse UCITS — use broad index inverse",
+      "leverage": -1
+    },
+    "technology": {
+      "ticker": "SQQQ",
+      "name": "WisdomTree NASDAQ 100 3x Daily Short",
+      "note": "NASDAQ-heavy tech exposure; reduce size for 3x leverage",
+      "leverage": -3
+    }
+  },
+  "usage_rules": {
+    "max_hold_days": 20,
+    "max_portfolio_pct": 10,
+    "prefer_1x_over_leveraged": true,
+    "rebalance_check": "weekly",
+    "note": "Daily-reset ETFs suffer compounding drag over time. Use for tactical hedges only, not long-term shorts."
+  }
+}

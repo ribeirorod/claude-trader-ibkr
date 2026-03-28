@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio, json
 import click
-from trader.news.benzinga import BenzingaClient
+from trader.news.factory import get_news_provider
 from trader.news.sentiment import SentimentScorer
 from trader.cli.__main__ import output_json
 
@@ -15,7 +15,7 @@ def _parse_lookback(s: str) -> int:
 
 @click.group()
 def news():
-    """News and sentiment analysis via Benzinga."""
+    """News and sentiment analysis (Marketaux → Benzinga)."""
 
 @news.command()
 @click.option("--tickers", required=True,
@@ -29,7 +29,7 @@ def latest(ctx, tickers, limit):
     Example: trader news latest --tickers AAPL,MSFT --limit 5
     """
     ticker_list = [t.strip() for t in tickers.replace(",", " ").split()]
-    client = BenzingaClient(ctx.obj["config"])
+    client = get_news_provider(ctx.obj["config"])
     async def run():
         try:
             return await client.get_news(ticker_list, limit=limit)
@@ -54,7 +54,7 @@ def sentiment(ctx, ticker, lookback):
     Example: trader news sentiment AAPL --lookback 48h
     """
     hours = _parse_lookback(lookback)
-    client = BenzingaClient(ctx.obj["config"])
+    client = get_news_provider(ctx.obj["config"])
     scorer = SentimentScorer()
     async def run():
         try:

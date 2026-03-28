@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class OrderRequest(BaseModel):
     ticker: str
     qty: float
-    side: Literal["buy", "sell"]
+    side: Literal["buy", "sell", "short"]
     order_type: Literal["market", "limit", "stop", "trailing_stop", "bracket"]
     price: float | None = None
     trail_percent: float | None = None
@@ -23,9 +23,12 @@ class Order(BaseModel):
     order_id: str
     ticker: str
     qty: float
-    side: Literal["buy", "sell"]
+    side: Literal["buy", "sell", "short"]
     order_type: str
     status: Literal["open", "filled", "cancelled", "pending"]
     price: float | None = None
     filled_price: float | None = None
     filled_qty: float | None = None
+    take_profit: float | None = None
+    stop_loss: float | None = None
+    created_at: str | None = None  # raw IBKR lastExecutionTime

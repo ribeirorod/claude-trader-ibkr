@@ -15,6 +15,17 @@ dependencies = [
     "yfinance>=0.2",
     "ibeam>=0.5.10",
     "matplotlib>=3.10.8",
+    "playwright>=1.58.0",
+    "anthropic>=0.84.0",
+    "groq>=1.1.1",
+    "claude-agent-sdk>=0.1.48",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "apscheduler>=3.10",
+    "python-telegram-bot>=21.0",
+    "pillow>=9.5",
+    "structlog>=25.5.0",
+    "telegramify-markdown>=1.1.1",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +34,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21", "pytest-mock>=3.12"]
 
 [project.scripts]
 trader = "trader.cli.__main__:cli"
+trader-server = "trader.server.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -27,7 +27,7 @@ class IBKRRestAdapter(Adapter):
     def __init__(self, config: Config):
         self._config = config
         self._client = IBKRRestClient(config)
-        self._account_id = config.ib_account
+        self._account_id = config.active_account
 
     async def connect(self) -> None:
         _RETRIES = 8
@@ -123,16 +123,44 @@ class IBKRRestAdapter(Adapter):
             contracts.append(OptionContract(strike=strike, right="put", expiry=expiry))
         return OptionChain(ticker=ticker, expiry=expiry, contracts=contracts)
 
+    async def validate_option_strike(
+        self, ticker: str, expiry: str, strike: float, right: str
+    ) -> float | None:
+        """Check if a strike exists for ticker/expiry/right.
+
+        Returns the nearest valid strike if the exact one isn't available,
+        or None if the ticker has no options chain at all.
+        """
+        try:
+            chain = await self.get_option_chain(ticker, expiry)
+        except Exception:
+            return None
+        available = [
+            c.strike for c in chain.contracts
+            if c.right == right and c.strike is not None
+        ]
+        if not available:
+            return None
+        if strike in available:
+            return strike
+        # Snap to nearest available strike
+        return min(available, key=lambda s: abs(s - strike))
+
     async def place_order(self, req: OrderRequest) -> Order:
         conid = await self._resolve_conid(req.ticker, req.contract_type,
                                           req.expiry, req.strike, req.right)
         ibkr_order_type = _ORDER_TYPE_MAP.get(req.order_type)
         if ibkr_order_type is None:
             raise ValueError(f"Unsupported order_type '{req.order_type}'. Supported: {list(_ORDER_TYPE_MAP)}")
+        # IBKR uses "SELL" for closing longs, "SSHORT" for opening new shorts
+        if req.side == "short":
+            ibkr_side = "SSHORT"
+        else:
+            ibkr_side = req.side.upper()
         body = {
             "conid": conid,
             "orderType": ibkr_order_type,
-            "side": req.side.upper(),
+            "side": ibkr_side,
             "quantity": req.qty,
             "tif": "DAY",
         }
@@ -158,7 +186,7 @@ class IBKRRestAdapter(Adapter):
 
         # Place bracket child orders linked to parent
         if req.order_type == "bracket" and parent_order_id:
-            child_side = "SELL" if req.side == "buy" else "BUY"
+            child_side = "BUY" if req.side in ("sell", "short") else "SELL"
             children = []
             if req.take_profit:
                 children.append({
@@ -249,6 +277,9 @@ class IBKRRestAdapter(Adapter):
                 price=o.get("price") or None,
                 filled_price=o.get("avgPrice") or None,
                 filled_qty=o.get("filledQuantity"),
+                take_profit=o.get("takeProfitPrice") or None,
+                stop_loss=o.get("stopLossPrice") or None,
+                created_at=o.get("lastExecutionTime") or o.get("lastExecutionTime_r") or None,
             ))
         return result
 
@@ -373,6 +404,19 @@ class IBKRRestAdapter(Adapter):
         )
         return bool(resp.get("success") or resp.get("deleted") or True)
 
+    # ----------------------------------------------------------- contract info
+
+    async def get_contract_details(self, conid: int) -> dict:
+        """Fetch sector/industry from IBKR contract info endpoint."""
+        try:
+            data = await self._client.get(f"/iserver/contract/{conid}/info")
+            return {
+                "sector": data.get("category", "") or data.get("sector", ""),
+                "industry": data.get("industry", ""),
+            }
+        except Exception:
+            return {"sector": "", "industry": ""}
+
     # ------------------------------------------------------------------ scanner
 
     async def scan(
@@ -382,25 +426,46 @@ class IBKRRestAdapter(Adapter):
         filters: list[dict] | None = None,
         limit: int = 20,
     ) -> list[ScanResult]:
+        # Map location to IBKR instrument type. EU stocks need "STOCK.EU",
+        # US stocks need "STK", ETFs need "ETF.EQ.US" as instrument, etc.
+        _INSTRUMENT_MAP = {
+            "STK.US": "STK",
+            "STK.EU": "STOCK.EU",
+            "ETF.EQ.US": "ETF.EQ.US",
+            "ETF.US": "ETF.EQ.US",
+        }
+        # Try longest prefix match
+        instrument = location.split(".")[0]
+        for prefix, instr in sorted(_INSTRUMENT_MAP.items(), key=lambda x: -len(x[0])):
+            if location.startswith(prefix):
+                instrument = instr
+                break
         payload: dict = {
-            "instrument": location.split(".")[0],  # e.g. "STK" from "STK.US.MAJOR"
+            "instrument": instrument,
             "location": location,
             "type": scan_type,
             "filter": filters or [],
         }
         data = await self._client.post("/iserver/scanner/run", json=payload)
         contracts = data.get("contracts", []) if isinstance(data, dict) else data
-        return [
-            ScanResult(
+        trimmed = contracts[:limit]
+
+        # Enrich with sector/industry from contract details (parallel)
+        async def _enrich(c: dict) -> ScanResult:
+            cid = c.get("con_id")
+            details = await self.get_contract_details(cid) if cid else {}
+            return ScanResult(
                 symbol=c.get("symbol", ""),
                 company_name=c.get("company_name", ""),
-                conid=c.get("con_id") or None,
+                conid=cid or None,
                 listing_exchange=c.get("listing_exchange", ""),
                 sec_type=c.get("sec_type", ""),
                 column_value=c.get("column_name", ""),
+                sector=details.get("sector", ""),
+                industry=details.get("industry", ""),
             )
-            for c in contracts[:limit]
-        ]
+
+        return await asyncio.gather(*[_enrich(c) for c in trimmed])
 
     async def scan_params(self) -> dict:
         return await self._client.get("/iserver/scanner/params")

@@ -2,8 +2,10 @@ from __future__ import annotations
 import httpx
 from trader.config import Config
 from trader.models import NewsItem
+from trader.news.base import NewsProvider
 
-class BenzingaClient:
+
+class BenzingaClient(NewsProvider):
     BASE = "https://api.benzinga.com/api/v2"
 
     def __init__(self, config: Config):

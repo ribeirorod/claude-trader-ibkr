@@ -1,0 +1,48 @@
+services:
+
+  # ── IBKR Client Portal Gateway ─────────────────────────────────────────────
+  # JRE container serving the IBKR web API at https://ibkr-gateway:5001.
+  # Port 5001 is exposed to the host so you can open https://localhost:5001
+  # in your browser for the one-time manual login (or to check auth status).
+  # Automatic re-auth is handled by ibkr-reauth.py (Playwright) in the trader
+  # container, triggered by ibkr-healthcheck every 5 minutes.
+  ibkr-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    volumes:
+      - ./clientportal.gw:/gateway   # gateway files mounted — no rebuild needed on updates
+    ports:
+      - "5001:5001"                  # expose to host for manual browser auth
+    healthcheck:
+      # Gateway returns 401 until authenticated — we just need it to be responsive.
+      # curl without -f exits 0 on any HTTP response (including 401), only fails on connection errors.
+      test: ["CMD-SHELL", "curl -sk --max-time 5 https://localhost:5001/v1/api/iserver/auth/status > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # ── Trader (FastAPI + APScheduler + Telegram + Playwright reauth) ───────────
+  trader:
+    build: .
+    env_file: .env
+    environment:
+      # Override .env defaults so the trader container reaches the gateway
+      # service by its Docker Compose service name instead of 127.0.0.1
+      IB_HOST: ibkr-gateway
+      IBEAM_GATEWAY_BASE_URL: https://ibkr-gateway:5001
+    ports:
+      - "9090:9090"
+    volumes:
+      - trader-data:/app/.trader     # logs, sessions, profiles, state files
+      - claude-auth:/home/trader/.claude  # Claude SDK auth — see docs/docker-auth.md
+    depends_on:
+      ibkr-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  trader-data:
+  claude-auth:

@@ -1,0 +1,14 @@
+# IBKR Client Portal Gateway — JRE image with curl for healthcheck
+# The gateway files (clientportal.gw/) are volume-mounted at /gateway at runtime,
+# so this image only provides the Java runtime + utilities.
+FROM eclipse-temurin:17-jre
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /gateway
+
+EXPOSE 5001
+
+CMD ["bash", "bin/run.sh", "root/conf.yaml"]

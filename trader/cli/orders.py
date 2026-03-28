@@ -11,9 +11,36 @@ def orders():
 
 def _run_order(ctx, req: OrderRequest):
     adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+    cfg = ctx.obj["config"]
+
     async def run():
         await adapter.connect()
         try:
+            # Guard check when AGENT_MODE=guarded
+            if cfg.agent_mode == "guarded" and req.side in ("buy", "short"):
+                from trader.guard import OrderGuard
+                acct = await adapter.get_account()
+                positions = await adapter.list_positions()
+                open_ords = await adapter.list_orders("open")
+                guard = OrderGuard()
+                result = guard.validate(
+                    order=req,
+                    account=acct,
+                    positions=positions,
+                    open_orders=open_ords,
+                    max_single_position_pct=cfg.max_position_pct,
+                    cash_reserve_pct=float(cfg.bear_cash_floor),
+                    max_new_positions_per_day=3,
+                    today_new_position_count=0,
+                )
+                if not result.allowed:
+                    import sys
+                    click.echo(json.dumps({
+                        "error": "Order rejected by OrderGuard",
+                        "reason": result.reason,
+                        "details": result.details,
+                    }))
+                    sys.exit(1)
             return await adapter.place_order(req)
         finally:
             await adapter.disconnect()
@@ -61,6 +88,33 @@ def buy(ctx, ticker, qty, order_type, price, take_profit, stop_loss,
 @click.argument("ticker")
 @click.argument("qty", type=float)
 @click.option("--type", "order_type", default="market",
+              type=click.Choice(["market", "limit", "bracket"]),
+              help="Order type.")
+@click.option("--price", type=float, default=None, help="Limit price.")
+@click.option("--take-profit", type=float, default=None,
+              help="Take profit (cover) price for bracket short.")
+@click.option("--stop-loss", type=float, default=None,
+              help="Stop loss (cover) price for bracket short.")
+@click.pass_context
+def short(ctx, ticker, qty, order_type, price, take_profit, stop_loss):
+    """
+    Short-sell TICKER QTY shares (opens a new short position via IBKR SSHORT).
+
+    \b
+    Examples:
+      trader orders short PBR 100
+      trader orders short PBR 100 --type limit --price 14.50
+      trader orders short PBR 100 --type bracket --price 14.50 --take-profit 12.00 --stop-loss 15.50
+    """
+    _run_order(ctx, OrderRequest(
+        ticker=ticker, qty=qty, side="short", order_type=order_type,
+        price=price, take_profit=take_profit, stop_loss=stop_loss,
+    ))
+
+@orders.command()
+@click.argument("ticker")
+@click.argument("qty", type=float)
+@click.option("--type", "order_type", default="market",
               type=click.Choice(["market", "limit", "stop"]))
 @click.option("--price", type=float, default=None)
 @click.option("--contract-type", default="stock",
@@ -75,6 +129,47 @@ def sell(ctx, ticker, qty, order_type, price, contract_type, expiry, strike, rig
         ticker=ticker, qty=qty, side="sell", order_type=order_type, price=price,
         contract_type=contract_type, expiry=expiry, strike=strike, right=right,
     ))
+
+@orders.command()
+@click.argument("ticker")
+@click.option("--price", type=float, default=None, help="Limit price (market if omitted).")
+@click.option("--qty", type=float, default=None,
+              help="Quantity to cover (auto-detected from short position if omitted).")
+@click.pass_context
+def cover(ctx, ticker, price, qty):
+    """
+    Buy-to-cover a short position in TICKER.
+
+    \b
+    Examples:
+      trader orders cover PBR
+      trader orders cover PBR --price 12.50
+      trader orders cover PBR --qty 50 --price 12.50
+    """
+    adapter = get_adapter(ctx.obj["broker"], ctx.obj["config"])
+    async def run():
+        await adapter.connect()
+        try:
+            positions = await adapter.list_positions()
+            pos = next((p for p in positions if p.ticker == ticker), None)
+            if pos is None or pos.qty >= 0:
+                raise click.UsageError(
+                    f"No short position found for {ticker}. Use --qty to specify size explicitly."
+                )
+            size = qty or abs(pos.qty)
+            order_type = "limit" if price else "market"
+            return await adapter.place_order(OrderRequest(
+                ticker=ticker, qty=size, side="buy",
+                order_type=order_type, price=price,
+            ))
+        finally:
+            await adapter.disconnect()
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
 
 @orders.command()
 @click.argument("ticker")

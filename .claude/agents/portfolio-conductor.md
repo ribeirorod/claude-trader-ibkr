@@ -137,9 +137,16 @@ Build `geo_context` object:
 ```
 
 Rules:
-- `severity = High` → set `block_new_longs: true` (no new entries until hedge confirmed); set `hedge_suggested: true`
-- `severity = Medium` → pass affected sectors to opportunity-finder as exclusions; do not block
+- `severity = High` → set `block_new_longs: true` (no new entries until hedge confirmed); set `hedge_suggested: true`; auto-dispatch hedge using the bearish decision tree (prefer inverse ETF from `.trader/inverse_etfs.json`, then index puts)
+- `severity = Medium` → pass affected sectors to opportunity-finder as exclusions; consider sector-specific puts if affected_tickers overlap with held positions
 - `severity = Low/None` → pass geo_context with empty lists; no action
+
+**Auto-hedging (when `hedge_suggested: true`):**
+1. Read `.trader/inverse_etfs.json` for mapped inverse ETFs
+2. Size hedge at 5-10% of net liquidation (proportional to severity)
+3. Prefer inverse ETFs over puts for index hedges (simpler, no expiry)
+4. Execute immediately in autonomous mode — hedges are time-sensitive
+5. Log with `"event": "HEDGE_EXECUTED"` and `"trigger": "geo_high_severity"`
 
 Log the scan result:
 ```bash
@@ -150,9 +157,41 @@ Pass `geo_context` to **all** specialist agents in Step 6.
 
 ---
 
-### 5b. Decide workflow
+### 5b. Check pipeline proposals
+
+**Pipeline-first:** Before dispatching specialists for discovery/analysis, check if the pipeline has already produced proposals:
+
+```bash
+cat .trader/pipeline/proposals.json 2>/dev/null | python3 -c "
+import json, sys
+from datetime import datetime, timezone, timedelta
+try:
+    data = json.load(sys.stdin)
+    run_ts = datetime.fromisoformat(data['run_id'].replace('Z', '+00:00'))
+    age_hours = (datetime.now(timezone.utc) - run_ts).total_seconds() / 3600
+    if age_hours <= 2:
+        print(json.dumps({'fresh': True, 'age_hours': round(age_hours, 1), 'total_proposals': data['total_proposals'], 'regime': data['regime']}))
+    else:
+        print(json.dumps({'fresh': False, 'age_hours': round(age_hours, 1)}))
+except: print(json.dumps({'fresh': False}))
+"
+```
+
+**If proposals are fresh (< 2 hours old):**
+- Skip `opportunity-finder` dispatch — the Scout and Analyst have already done this work
+- Read proposals directly and proceed to Step 7 (guardrail review) for each proposal
+- For **long** proposals, execute bracket orders: `uv run trader orders buy TICKER QTY --type bracket --price PRICE --stop-loss SL --take-profit TP`
+- For **hedge** proposals with options: `uv run trader orders buy TICKER QTY --contract-type option --right put --strike STRIKE --expiry EXPIRY`
+- For **ETF** proposals: `uv run trader orders buy TICKER QTY --type limit --price PRICE --contract-type etf`
+- Still run `risk-monitor`, `portfolio-health`, and `order-alert-manager` for position management
+
+**If proposals are stale or missing:** Fall back to the specialist dispatch workflow below.
+
+### 5c. Decide workflow
 
 **Bootstrap detection:** If positions = 0 AND open buy orders = 0 (a fresh or reset account), set `bootstrap = true`. Pass this flag to `opportunity-finder` and `portfolio-health` so they know to propose a full initial allocation rather than incremental adjustments. Skip `risk-monitor` (nothing to protect) and skip `strategy-optimizer` (no history to optimise yet). Note: orphaned GTC stop orders with no matching position or buy order do NOT count — `order-alert-manager` will cancel them in Step 6.
+
+**Bootstrap position limit:** When `bootstrap = true`, use `max_new_positions_bootstrap` (default 6) instead of the per-slot and per-day limits. Bootstrap orders do **not** count toward `max_new_positions_per_day` or `max_new_positions_per_slot` — they are a one-time portfolio establishment event, not normal trading activity. Log each bootstrap order with `"bootstrap": true` in the ORDER_INTENT event.
 
 Based on time slot, portfolio state, and recent log:
 
@@ -209,7 +248,9 @@ For each proposed trade:
 - **HARD RULE — never exceed cash**: total cost of new order must fit within `cash - (sum of all pending open buy orders)`. Never rely on `buying_power` — it is margin and must be ignored.
 - Single position ≤ `max_single_position_pct`% of net liquidation
 - **Cash floor** — if `cash - pending_buy_cost < min_cash_reserve_pct% * net_liquidation`, block ALL new buys; log `CASH_FLOOR_BLOCK` and skip
-- Daily new positions ≤ `max_new_positions_per_day` (count from today's log entries)
+- **Per-slot limit** — new positions opened in this run ≤ `max_new_positions_per_slot` (count ORDER_INTENTs in the current run_id only). Slot = one cron invocation.
+- **Daily limit** — new positions opened today ≤ `max_new_positions_per_day` (count non-bootstrap ORDER_INTENTs from today's log where `"bootstrap"` is absent or false)
+- **Bootstrap exception** — if `bootstrap = true`, apply `max_new_positions_bootstrap` instead; bootstrap ORDER_INTENTs are excluded from per-slot and per-day counts in all future runs today
 - Skip and log reason if any guardrail is breached
 
 **Pending buy cost** = sum of `qty * limit_price` for all open buy orders from `trader orders list --status open`.
@@ -229,18 +270,101 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 
 Then execute:
 ```bash
+# ── Long entries ──────────────────────────────────────────────────────────────
 # Equity buy
 uv run trader orders buy TICKER SHARES --type limit --price PRICE
 
-# Options
+# ── Bearish / short entries ───────────────────────────────────────────────────
+# Short-sell equity (IBKR SSHORT — opens a new short position)
+uv run trader orders short TICKER SHARES --type limit --price PRICE
+# Short with bracket (entry + cover stop + cover target)
+uv run trader orders short TICKER SHARES --type bracket --price PRICE --take-profit COVER_TARGET --stop-loss COVER_STOP
+
+# Buy put option (defined-risk bearish directional)
+uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike PRICE --right put
+# Buy put spread (lower cost bearish — buy higher strike put, sell lower strike put)
+# Execute as two legs:
+uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike LONG_STRIKE --right put
+uv run trader orders sell TICKER QTY --contract-type option --expiry DATE --strike SHORT_STRIKE --right put
+
+# Buy inverse ETF (UCITS — for broad market hedging, see .trader/inverse_etfs.json)
+uv run trader orders buy INVERSE_ETF SHARES --type limit --price PRICE --contract-type etf
+
+# ── Options (all directions) ─────────────────────────────────────────────────
 uv run trader orders buy TICKER QTY --contract-type option --expiry DATE --strike PRICE --right call|put
 
-# Stop loss
+# ── Closing / covering ───────────────────────────────────────────────────────
+# Cover a short position (buy-to-cover)
+uv run trader orders cover TICKER
+uv run trader orders cover TICKER --price LIMIT_PRICE --qty PARTIAL_QTY
+
+# Fixed stop loss (use for new entries where stop is at a specific support level)
 uv run trader orders stop TICKER --price PRICE
+
+# Trailing stop (prefer for profitable positions — protects gains without a fixed exit price)
+# Use --trail-percent for volatile stocks (e.g. 3-5%), --trail-amount for stable ones
+uv run trader orders trailing-stop TICKER --trail-percent 2.5
+uv run trader orders trailing-stop TICKER --trail-amount 5.00
+
+# Take profit (limit sell at target)
+uv run trader orders take-profit TICKER --price PRICE
 
 # Trim
 uv run trader orders sell TICKER SHARES --type limit --price PRICE
 ```
+
+**Stop vs Trailing stop guidance:**
+- New position (just entered): use fixed `stop` at a technical level (prior support, -5% to -8%)
+- Position up 10%+: consider converting fixed stop to `trailing-stop` to lock in gains
+- High-conviction hold: use wider trail (5%) to avoid shakeouts
+- Sector rotation / weakening: tighten trail (2-3%) or switch to fixed stop near current price
+
+### Bearish trade decision tree
+
+When a proposal has `signal: -1` (from pullback, opportunity-finder, or risk-monitor hedge suggestion), auto-dispatch follows this priority:
+
+1. **Put option available** (from `--with-options` overlay) → execute `buy put` — defined risk, no margin required
+2. **Put spread recommended** (from options_selector `select_spread()`) → execute both legs — lower premium, still defined risk
+3. **Inverse ETF mapped** (check `.trader/inverse_etfs.json` for the underlying index/sector) → execute `buy INVERSE_ETF` — simpler, no expiry management
+4. **Equity shortable** (confirmed by opportunity-finder) → execute `short TICKER` with bracket stop — unlimited risk, use only with strong conviction + tight stop
+5. **No viable bearish vehicle** → log as `BEARISH_SIGNAL_NO_VEHICLE` and skip
+
+**Autonomous execution for bearish signals:** When `AGENT_MODE=autonomous`, bearish trades follow the same auto-dispatch as long trades — no human intervention required. The decision tree above applies automatically. Always log `ORDER_INTENT` with `"direction": "bearish"` before execution.
+
+**Risk guardrails for bearish positions:**
+- Max combined bearish exposure: 20% of net liquidation (shorts + puts + inverse ETFs)
+- Every short equity position MUST have a stop-loss (bracket or separate stop order)
+- Put/spread max risk per trade: same as long side (`risk_pct` from profile, default 2%)
+- Inverse ETFs follow same sizing rules as regular ETF positions
+
+### Options position management
+
+For any open option positions (puts or calls), check on every run:
+
+```bash
+uv run trader positions list  # look for contract_type: option entries
+```
+
+**Expiry management (DTE thresholds):**
+- **DTE ≤ 5**: Close the position (sell to close) unless it is deep ITM and intended for exercise
+- **DTE ≤ 14**: Evaluate — if profitable (≥ 50% of max gain), close to lock in profits; if losing, consider rolling
+- **DTE ≤ 21**: Monitor — if losing and vol has crushed, consider rolling to next monthly expiry
+
+**Roll decision:** When rolling, close existing position and open new one in same command sequence:
+```bash
+# Close existing put
+uv run trader orders sell TICKER QTY --contract-type option --expiry OLD_DATE --strike OLD_STRIKE --right put
+# Open new put at next expiry
+uv run trader orders buy TICKER QTY --contract-type option --expiry NEW_DATE --strike NEW_STRIKE --right put
+```
+
+**Profit target:** Close puts/calls when unrealized gain reaches 50-80% of max possible gain (premium paid). Don't hold for the last 20% — theta decay is not worth the gamma risk.
+
+**Defense:** If a short put in a spread is breached (underlying drops below short strike):
+- If spread: max loss is capped — let it ride or close early to salvage remaining value
+- If naked long put: hold if thesis intact, close if thesis broken
+
+Log all options management actions with `"event": "OPTIONS_MGMT"` in agent.jsonl.
 
 ### 9. Log run end
 
@@ -253,7 +377,13 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 - Calm day, healthy positions → risk-monitor clean, health shows minor drift, opportunity-finder finds nothing → log "do nothing", exit cleanly
 - Strong pre-market signal → opportunity-finder surfaces VCP breakout in semiconductors → position-sizer sizes it → conductor logs intent → executes limit order
 - Position down 22% → risk-monitor flags tail risk → conductor places stop or trims
+- Pullback fires -1 on NVDA → options overlay returns put recommendation → conductor auto-executes buy put → logs `ORDER_INTENT` with `direction: bearish`
+- Geo scan = High severity → conductor checks inverse ETF map → buys XISX (short S&P 500) as portfolio hedge → blocks new longs
+- Put position at 10 DTE, up 60% → conductor sells to close, logs `OPTIONS_MGMT` event
+- Put spread short leg breached → spread has capped loss → conductor holds, logs monitoring note
 
 ## Skills Available to Dispatch
 
-`portfolio-manager`, `market-top-detector`, `stanley-druckenmiller-investment`, `sector-analyst`, `technical-analyst`, `market-news-analyst`, `economic-calendar-fetcher`, `geopolitical-influence`, `stock-screener`, `vcp-screener`, `earnings-trade-analyzer`, `options-strategy-advisor`, `position-sizer`, `backtest-expert`, `trader-strategies`
+`portfolio-manager`, `market-top-detector`, `stanley-druckenmiller-investment`, `sector-analyst`, `technical-analyst`, `market-news-analyst`, `economic-calendar-fetcher`, `geopolitical-influence`, `stock-screener`, `vcp-screener`, `earnings-trade-analyzer`, `options-strategy-advisor`, `position-sizer`, `backtest-expert`, `trader-strategies`, `etf-rotation`
+
+**etf-rotation** — Use during `weekly` and `monthly` slots, and whenever the `eu-pre-market` slot shows weak US/EU equity signals. Runs Dual Momentum (GEM) and Ivy Portfolio GTAA across UCITS ETFs (CSPX, IWDA, EQQQ, EMIM, SGLN, AGGH, etc.). Tickers are LSE/XETRA listed — use short form (e.g. `CSPX`, not `CSPX.L`) with all CLI commands; the strategies layer resolves yfinance suffixes automatically.

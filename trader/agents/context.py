@@ -27,9 +27,24 @@ def build_context(
     snapshot: dict[str, Any],
     recent_log: list[dict],
     profile_path: Path = DEFAULT_PROFILE_PATH,
+    regime: str | None = None,
+    cfg=None,
 ) -> dict[str, Any]:
+    from trader.config import Config  # local import to avoid circular at module level
+    if cfg is None:
+        cfg = Config()
+
     profile = load_profile(profile_path)
     targets = profile.get("portfolio_targets", {})
+
+    # Regime-aware cash floor: override target_cash_reserve_pct when defensive
+    base_cash_floor = targets.get("target_cash_reserve_pct", 10) / 100
+    if regime == "bear":
+        effective_cash_floor = max(base_cash_floor, cfg.bear_cash_floor)
+    elif regime == "caution":
+        effective_cash_floor = max(base_cash_floor, cfg.caution_cash_floor)
+    else:
+        effective_cash_floor = base_cash_floor
 
     return {
         "run_id": run_id,
@@ -37,10 +52,12 @@ def build_context(
         "snapshot": snapshot,
         "recent_log": recent_log,
         "profile": profile,
+        "market_regime": regime or "bull",
         "guardrails": {
             "cash_only": not profile.get("asset_classes", {}).get("leverage", False),
             "max_single_position_pct": targets.get("max_single_position_pct", 10) / 100,
             "max_new_positions_per_day": targets.get("max_new_positions_per_day", 3),
-            "target_cash_reserve_pct": targets.get("target_cash_reserve_pct", 10) / 100,
+            "target_cash_reserve_pct": effective_cash_floor,
+            "block_new_longs": regime == "bear",
         },
     }

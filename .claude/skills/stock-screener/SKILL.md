@@ -145,12 +145,31 @@ Assign scores and calculate composite (raw/14 × 100).
 
 ### Step 4b: Add strong candidates to watchlist (side effect)
 
-For any ticker scoring ≥70 (Strong or Exceptional):
+For any ticker scoring ≥70 (Strong or Exceptional), add to both the `canslim` list and the relevant sector list using this mapping:
+
+| Sector | List |
+|--------|------|
+| Semiconductors / chip equipment | `semiconductors` |
+| Energy / oil / gas | `energy` |
+| Quantum computing | `quantum` |
+| Defense / government tech | `momentum` |
+| All others | `canslim` |
+
 ```bash
+# Always add to canslim
 uv run trader watchlist add TICKER1 TICKER2 --list canslim
+
+# Also add to sector list if applicable
+uv run trader watchlist add TICKER --list semiconductors   # if semi
+uv run trader watchlist add TICKER --list energy           # if energy
 ```
 
-This populates the `canslim` watchlist so future screener runs can use it as the starting universe when signals are fresh.
+This populates `canslim` so future screener runs use it as the starting universe, and keeps sector lists current with the latest high-scoring candidates.
+
+**Prune weak scorers:** For any ticker that scores <55 and was previously in a watchlist, remove it:
+```bash
+uv run trader watchlist remove WEAK_TICKER --list canslim
+```
 
 ### Step 5: Output Ranked Shortlist
 
