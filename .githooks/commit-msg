@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Enforce Conventional Commits locally.
+# Install: git config core.hooksPath .githooks
+
+MSG=$(head -1 "$1")
+PATTERN='^(feat|fix|docs|chore|test|refactor|ci|style|perf|build|revert)(\(.+\))?!?: .+'
+
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+  echo "❌ Commit message does not follow Conventional Commits:"
+  echo "   $MSG"
+  echo ""
+  echo "Expected format: <type>(<scope>): <description>"
+  echo "  feat: add new feature"
+  echo "  fix: correct a bug"
+  echo "  docs: update documentation"
+  echo "  chore: maintenance task"
+  echo ""
+  echo "See CONTRIBUTING.md for the full list."
+  exit 1
+fi

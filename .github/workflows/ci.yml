@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   test:
@@ -12,8 +12,48 @@ jobs:
 
       - uses: astral-sh/setup-uv@v4
 
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libjpeg-dev zlib1g-dev libfreetype-dev
+
       - name: Install dependencies
         run: uv sync --extra dev
 
       - name: Run tests
         run: uv run python -m pytest tests/unit/ -v
+
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          PATTERN='^(feat|fix|docs|chore|test|refactor|ci|style|perf|build|revert)(\(.+\))?!?:'
+
+          FAILED=0
+          while IFS= read -r msg; do
+            if ! echo "$msg" | grep -qE "$PATTERN"; then
+              echo "❌ Bad commit message: $msg"
+              FAILED=1
+            fi
+          done < <(git log "$BASE".."$HEAD" --format="%s")
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "Commit messages must follow Conventional Commits:"
+            echo "  feat: add new feature"
+            echo "  fix: correct a bug"
+            echo "  docs: update documentation"
+            echo "  chore: maintenance task"
+            echo "See CONTRIBUTING.md for the full list."
+            exit 1
+          fi
+
+          echo "✅ All commit messages follow conventional commits"
