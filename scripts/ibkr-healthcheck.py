@@ -48,6 +48,7 @@ GATEWAY_URL = os.getenv("IBEAM_GATEWAY_BASE_URL", "https://localhost:5001")
 IBKR_MODE = os.getenv("IBKR_MODE", "paper")
 AUTH_ENDPOINT = f"{GATEWAY_URL}/v1/api/iserver/auth/status"
 TICKLE_ENDPOINT = f"{GATEWAY_URL}/v1/api/tickle"
+COOKIES_FILE = ROOT / ".trader" / "ibkr-cookies.json"
 
 # State file — prevents spamming Telegram on every check when already alerted
 STATE_FILE = ROOT / ".trader" / "ibkr-health.state"
@@ -64,10 +65,24 @@ def _ssl_ctx() -> ssl.SSLContext:
     return ctx
 
 
+def _load_cookie_header() -> str | None:
+    """Load session cookies saved by ibkr-reauth.py and return as Cookie header."""
+    try:
+        if COOKIES_FILE.exists():
+            cookies = json.loads(COOKIES_FILE.read_text())
+            return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+    except Exception:
+        pass
+    return None
+
+
 def check_auth() -> bool:
     """Returns True if IBKR session is authenticated."""
     try:
         req = urllib.request.Request(AUTH_ENDPOINT)
+        cookie_header = _load_cookie_header()
+        if cookie_header:
+            req.add_header("Cookie", cookie_header)
         with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
             data = json.loads(resp.read())
             authenticated = data.get("authenticated", False)
@@ -85,6 +100,9 @@ def tickle() -> None:
     """Send /tickle to keep the session alive."""
     try:
         req = urllib.request.Request(TICKLE_ENDPOINT, method="POST")
+        cookie_header = _load_cookie_header()
+        if cookie_header:
+            req.add_header("Cookie", cookie_header)
         with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
             log.info("ibkr_tickle_sent", status=resp.status)
     except Exception as exc:
@@ -239,8 +257,18 @@ def main() -> None:
     if failures >= restart_threshold:
         log.warning("ibkr_gateway_restart_threshold_reached", failures=failures)
         set_failure_count(0)
-        set_alert_state("ok")  # Reset so next failure re-alerts cleanly
-        trigger_gateway_restart()
+        if IBKR_MODE == "paper":
+            # Paper: reset alert so next failure re-alerts and retries cleanly
+            set_alert_state("ok")
+            trigger_gateway_restart()
+        else:
+            # Live: keep "alerted" state — don't spam user with repeated
+            # "session lost" messages. Gateway restart won't help without MFA.
+            # Just stay quiet until user sends /reauth.
+            if last_alert_state() != "alerted":
+                trigger_gateway_restart()
+            else:
+                log.info("ibkr_live_suppressing_restart_spam", failures=failures)
         return
 
     if last_alert_state() == "alerted":

@@ -230,11 +230,25 @@ async def _handle_reauth(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     """User-triggered IBKR re-authentication. Runs Playwright login + MFA flow."""
     if not _is_owner(update):
         return
-    import subprocess, sys
+    import subprocess, sys, time as _time
     reauth_script = ROOT / "scripts" / "ibkr-reauth.py"
     if not reauth_script.exists():
         await update.message.reply_text("reauth script not found.")
         return
+    # Prevent concurrent reauth — check lock file
+    lock_file = ROOT / ".trader" / "reauth.lock"
+    if lock_file.exists():
+        try:
+            lock_age = _time.time() - float(lock_file.read_text().strip())
+            if lock_age < 180:
+                await update.message.reply_text(
+                    "⏳ Reauth already in progress. Wait for it to finish or try again in a few minutes.",
+                )
+                return
+        except Exception:
+            pass
+    # Clear stale MFA code before starting
+    MFA_CODE_FILE.unlink(missing_ok=True)
     await update.message.reply_text(
         "🔐 <b>Starting IBKR re-authentication...</b>\n\n"
         "You will be asked for your MFA code shortly.",
