@@ -21,7 +21,7 @@ from trader.strategies.stop_loss import (
     regime_atr_multiplier,
 )
 from trader.config import Config
-from trader.models import Position, Order
+from trader.models import Position, Order, SentimentResult
 
 # Hard cap: no single proposal should exceed this % of NLV
 _MAX_POSITION_PCT = 10.0
@@ -126,6 +126,7 @@ def run_analyze(
     """
     candidates_path = pipeline_dir / "candidates.json"
     cs = CandidateSet.model_validate_json(candidates_path.read_text())
+    ticker_sentiment = cs.ticker_sentiment  # {ticker: float}
 
     rf = RiskFilter()
     atr_mult = regime_atr_multiplier(regime)
@@ -189,14 +190,35 @@ def run_analyze(
             if consensus < threshold:
                 continue
 
-            # Risk filter (with regime!)
+            # Build SentimentResult from discover's scored sentiment
+            sentiment = None
+            agg_score = ticker_sentiment.get(candidate.ticker)
+            if agg_score is not None:
+                if agg_score > 0.1:
+                    sig = "bullish"
+                elif agg_score < -0.1:
+                    sig = "bearish"
+                else:
+                    sig = "neutral"
+                sentiment = SentimentResult(
+                    ticker=candidate.ticker,
+                    score=agg_score,
+                    signal=sig,
+                    article_count=len(candidate.news),
+                    lookback_hours=24,
+                    top_headlines=[n.headline for n in candidate.news[:3]],
+                )
+
+            # Risk filter (with regime and sentiment!)
             filtered = rf.filter(
                 signal=direction_signal,
                 quote=None,
                 position=None,
-                sentiment=None,
+                sentiment=sentiment,
                 regime=regime,
                 paper_mode=paper_mode,
+                account_value=account_value,
+                ticker=candidate.ticker,
             )
             if filtered["filtered"]:
                 continue
