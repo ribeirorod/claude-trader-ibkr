@@ -335,3 +335,49 @@ def execute(ctx, max_orders: int, dry_run: bool):
 
     result = asyncio.run(_run())
     output_json(result)
+
+
+@pipeline.command()
+@click.option("--regime", type=click.Choice(["bull", "caution", "bear"]), default=None,
+              help="Market regime override. Auto-detected if omitted.")
+@click.option("--consensus", type=int, default=3, show_default=True,
+              help="Minimum strategy consensus for discovery candidates.")
+@click.option("--watchlist-consensus", type=int, default=2, show_default=True,
+              help="Minimum strategy consensus for watchlist candidates.")
+@click.option("--max-orders", type=int, default=5, show_default=True,
+              help="Maximum number of proposals to execute.")
+@click.option("--dry", "dry_run", is_flag=True, default=False,
+              help="Run discover + analyze only, skip execution.")
+@click.pass_context
+def run(ctx, regime, consensus, watchlist_consensus, max_orders, dry_run):
+    """Run the full pipeline: discover -> analyze -> execute.
+
+    \b
+    With --dry, stops after analyze (review proposals before acting).
+
+    Examples:
+      trader pipeline run                    # full auto
+      trader pipeline run --dry              # discover + analyze only
+      trader pipeline run --regime bear      # force bear regime
+    """
+    # Step 1: Invoke discover
+    ctx.invoke(discover, regime=regime)
+
+    # Read the regime that discover resolved (from candidates.json)
+    pipeline_dir = _get_pipeline_dir()
+    candidates_path = pipeline_dir / "candidates.json"
+    if candidates_path.exists():
+        cs_data = json.loads(candidates_path.read_text())
+        resolved_regime = cs_data.get("regime", regime)
+    else:
+        resolved_regime = regime
+
+    # Step 2: Invoke analyze with resolved regime
+    ctx.invoke(analyze, regime=resolved_regime, consensus=consensus,
+               watchlist_consensus=watchlist_consensus)
+
+    if dry_run:
+        return
+
+    # Step 3: Invoke execute
+    ctx.invoke(execute, max_orders=max_orders, dry_run=False)

@@ -169,3 +169,60 @@ def test_execute_rejects_when_guard_blocks(tmp_path):
 
     # place_order should NOT have been called
     mock_adapter.place_order.assert_not_called()
+
+
+def test_pipeline_run_dry_skips_execute(tmp_path):
+    """pipeline run --dry invokes discover and analyze but NOT execute."""
+    import click
+    runner = CliRunner()
+
+    # We mock discover and analyze at the callback level so we can track calls
+    # without needing real broker/news connections.
+    discover_called = []
+    analyze_called = []
+    execute_called = []
+
+    from trader.cli.pipeline import discover, analyze, execute
+
+    # Mark fakes with @click.pass_context so ctx.invoke passes the context
+    @click.pass_context
+    def fake_discover(ctx, regime):
+        discover_called.append({"regime": regime})
+        # Write a minimal candidates.json so run() can read the regime
+        pipeline_dir = tmp_path / "pipeline"
+        pipeline_dir.mkdir(exist_ok=True)
+        (pipeline_dir / "candidates.json").write_text(json.dumps({
+            "regime": regime or "bull",
+            "total_candidates": 0,
+        }))
+
+    @click.pass_context
+    def fake_analyze(ctx, regime, consensus, watchlist_consensus):
+        analyze_called.append({
+            "regime": regime,
+            "consensus": consensus,
+            "watchlist_consensus": watchlist_consensus,
+        })
+
+    @click.pass_context
+    def fake_execute(ctx, max_orders, dry_run):
+        execute_called.append({"max_orders": max_orders, "dry_run": dry_run})
+
+    with patch("trader.cli.pipeline._get_pipeline_dir", return_value=tmp_path / "pipeline"), \
+         patch.object(discover, "callback", fake_discover), \
+         patch.object(analyze, "callback", fake_analyze), \
+         patch.object(execute, "callback", fake_execute):
+
+        result = runner.invoke(cli, ["pipeline", "run", "--dry", "--regime", "bull"])
+
+    assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+
+    # discover and analyze should have been called
+    assert len(discover_called) == 1, f"discover not called: {discover_called}"
+    assert discover_called[0]["regime"] == "bull"
+
+    assert len(analyze_called) == 1, f"analyze not called: {analyze_called}"
+    assert analyze_called[0]["regime"] == "bull"
+
+    # execute should NOT have been called (--dry flag)
+    assert len(execute_called) == 0, f"execute was called unexpectedly: {execute_called}"
