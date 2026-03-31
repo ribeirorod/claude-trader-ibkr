@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import traceback
 from datetime import datetime
@@ -153,7 +154,8 @@ async def _handle_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/bod — beginning-of-day report\n"
         "/eod — end-of-day report\n"
         "/healthcheck — IBKR session health check\n"
-        f"/signals — watchlist signals scan{admin}\n\n"
+        "/signals — watchlist signals scan\n"
+        f"/pipeline — run discover → analyze (dry){admin}\n\n"
         "Or just send any message, voice note, image, or file.",
         parse_mode=ParseMode.HTML,
     )
@@ -321,7 +323,7 @@ async def _run_script_cron(update: Update, job_id: str, label: str) -> None:
     """Trigger a system script cron job."""
     if not _is_owner(update):
         return
-    import json, subprocess, sys
+    import shlex
     crons_path = ROOT / ".claude" / "crons.json"
     try:
         jobs = json.loads(crons_path.read_text())
@@ -332,7 +334,6 @@ async def _run_script_cron(update: Update, job_id: str, label: str) -> None:
         await update.message.reply_text(f"Cron job '{job_id}' not found.")
         return
     await update.message.reply_text(f"Running <b>{label}</b>...", parse_mode=ParseMode.HTML)
-    import shlex
     args = shlex.split(job["cmd"])
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -383,6 +384,28 @@ async def _handle_healthcheck(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 async def _handle_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_script_cron(update, "watchlist-signals-morning", "Watchlist signals scan")
+
+async def _handle_pipeline(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run pipeline discover → analyze (dry run) and report proposals."""
+    await _run_script_cron(update, "pipeline-dry", "Pipeline discover → analyze")
+    # Send a proposals summary if available
+    proposals_path = ROOT / ".trader" / "pipeline" / "proposals.json"
+    try:
+        from trader.pipeline.models import ProposalSet
+        ps = ProposalSet.model_validate_json(
+            await asyncio.to_thread(proposals_path.read_text)
+        )
+    except (FileNotFoundError, Exception):
+        return
+    lines = [f"<b>Pipeline complete</b> — {ps.regime.upper()} regime, {ps.total_proposals} proposals\n"]
+    for sector, sp in ps.sectors.items():
+        if not sp.proposals:
+            continue
+        lines.append(f"\n<b>{sector}</b>")
+        for p in sp.proposals:
+            price_str = f" @ ${p.order.price:.2f}" if p.order.price else ""
+            lines.append(f"  {p.direction.upper()} {p.ticker}{price_str} — {p.consensus}/6 consensus, {p.conviction}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 # ── Message handler ───────────────────────────────────────────────────────────
@@ -498,6 +521,7 @@ def build_telegram_app() -> Application:
     app.add_handler(CommandHandler("eod", _handle_eod))
     app.add_handler(CommandHandler("healthcheck", _handle_healthcheck))
     app.add_handler(CommandHandler("signals", _handle_signals))
+    app.add_handler(CommandHandler("pipeline", _handle_pipeline))
     # Admin
     app.add_handler(CommandHandler("users", _handle_users))
     app.add_handler(CommandHandler("adduser", _handle_adduser))

@@ -88,5 +88,13 @@
     "agent": "system",
     "cmd": "uv run python scripts/watchlist-signals.py",
     "prompt": "Run watchlist signal scan. Reads all watchlists from outputs/watchlists.json, runs RSI+news signals on each, sends grouped Telegram push (BUY/SELL/HOLD per list)."
+  },
+  {
+    "id": "pipeline-dry",
+    "cron": "0 0 31 2 *",
+    "label": "Manual only — pipeline discover → analyze (dry run)",
+    "agent": "system",
+    "cmd": "uv run trader pipeline run --dry",
+    "prompt": "Run pipeline discover → analyze in dry-run mode."
   }
 ]
