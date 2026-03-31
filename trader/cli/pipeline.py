@@ -57,15 +57,16 @@ def discover(ctx, regime: str | None):
         from trader.config import Config
         config = Config()
 
+    pipeline_dir = _get_pipeline_dir()
+
     # Auto-detect regime if not provided
     if regime is None:
-        regime = detect_regime().value
+        regime = detect_regime(cache_dir=pipeline_dir).value
 
     adapter = get_adapter(broker, config)
     news_provider = get_news_provider(config)
 
     watchlist_path = _get_watchlist_path()
-    pipeline_dir = _get_pipeline_dir()
 
     async def _run():
         await adapter.connect()
@@ -134,7 +135,7 @@ def analyze(ctx, regime: str | None, consensus: int, watchlist_consensus: int):
 
     # Auto-detect regime if not provided
     if regime is None:
-        regime = detect_regime().value
+        regime = detect_regime(cache_dir=pipeline_dir).value
 
     adapter = get_adapter(broker, config)
 
