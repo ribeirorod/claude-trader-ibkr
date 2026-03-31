@@ -96,5 +96,13 @@
     "agent": "system",
     "cmd": "uv run trader pipeline run --dry",
     "prompt": "Run pipeline discover → analyze in dry-run mode."
+  },
+  {
+    "id": "news-fetcher",
+    "cron": "10 7,9,11,13,15,17 * * 1-5",
+    "label": "Weekdays every 2h (7:10am–5:10pm CET) — background news fetcher",
+    "agent": "system",
+    "cmd": "uv run python scripts/news-fetcher.py",
+    "prompt": "Fetch news for all watchlist tickers. Caches results in .trader/pipeline/news-cache.json with 4-hour TTL. Skips tickers with fresh cache."
   }
 ]
