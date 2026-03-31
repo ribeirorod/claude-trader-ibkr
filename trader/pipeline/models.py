@@ -32,6 +32,7 @@ class CandidateSet(BaseModel):
     regime: str
     sectors: dict[str, list[Candidate]]
     geo_context: GeoContext = GeoContext()
+    ticker_sentiment: dict[str, float] = {}  # ticker -> aggregate score from SentimentScorer
 
     @computed_field
     @property
