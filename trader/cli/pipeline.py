@@ -9,6 +9,7 @@ import click
 
 from trader.adapters.factory import get_adapter
 from trader.cli.__main__ import output_json
+from trader.guard import OrderGuard
 from trader.market.regime import detect_regime
 from trader.models import OrderRequest
 from trader.news.factory import get_news_provider
@@ -189,6 +190,9 @@ def execute(ctx, max_orders: int, dry_run: bool):
     and places orders via the broker adapter. Supports bracket orders
     (with stop-loss + take-profit), limit orders, and options.
 
+    Every order is validated by OrderGuard before placement. Orders that
+    fail guard checks are skipped with status="guarded".
+
     Examples:
       trader pipeline execute
       trader pipeline execute --max-orders 3
@@ -223,10 +227,16 @@ def execute(ctx, max_orders: int, dry_run: bool):
         return
 
     adapter = get_adapter(broker, config)
+    guard = OrderGuard()
 
     async def _run():
         await adapter.connect()
         try:
+            # Fetch account state for guard validation
+            account = await adapter.get_account()
+            positions = await adapter.list_positions()
+            open_orders = await adapter.list_orders()
+
             results = []
             for p in to_execute:
                 strike = p.order.strike
@@ -267,6 +277,27 @@ def execute(ctx, max_orders: int, dry_run: bool):
                     right=right,
                 )
 
+                # OrderGuard validation before placement
+                guard_result = guard.validate(
+                    order=order_req,
+                    account=account,
+                    positions=positions,
+                    open_orders=open_orders,
+                )
+                if not guard_result.allowed:
+                    logger.warning(
+                        "%s: order blocked by guard — %s",
+                        p.ticker, guard_result.reason,
+                    )
+                    results.append({
+                        "ticker": p.ticker,
+                        "direction": p.direction,
+                        "status": "guarded",
+                        "reason": guard_result.reason,
+                        "details": guard_result.details,
+                    })
+                    continue
+
                 if dry_run:
                     results.append({
                         "ticker": p.ticker,
@@ -294,6 +325,7 @@ def execute(ctx, max_orders: int, dry_run: bool):
 
             return {
                 "executed": len([r for r in results if r["status"] == "placed"]),
+                "guarded": len([r for r in results if r["status"] == "guarded"]),
                 "errors": len([r for r in results if r["status"] == "error"]),
                 "dry_run": dry_run,
                 "results": results,
