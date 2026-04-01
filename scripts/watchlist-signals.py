@@ -6,7 +6,7 @@ scoring and sends Telegram push with candidates grouped by sector.
 Usage:
   uv run python scripts/watchlist-signals.py
 
-Reads:  outputs/watchlists.json (via pipeline discover)
+Reads:  .trader/watchlists.json (via pipeline discover)
 Writes: .trader/pipeline/candidates.json (via pipeline discover)
 Sends:  one Telegram message with discovered candidates and sentiment.
 Runs:   weekdays 8:05am and 12:00pm CET via crons.json.

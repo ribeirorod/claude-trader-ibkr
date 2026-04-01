@@ -155,7 +155,8 @@ async def _handle_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/eod — end-of-day report\n"
         "/healthcheck — IBKR session health check\n"
         "/signals — watchlist signals scan\n"
-        f"/pipeline — run discover → analyze (dry){admin}\n\n"
+        "/pipeline — run discover → analyze (dry)\n"
+        f"/pipeline_execute — run discover → analyze → execute (live){admin}\n\n"
         "Or just send any message, voice note, image, or file.",
         parse_mode=ParseMode.HTML,
     )
@@ -407,6 +408,29 @@ async def _handle_pipeline(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             lines.append(f"  {p.direction.upper()} {p.ticker}{price_str} — {p.consensus}/6 consensus, {p.conviction}")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
+async def _handle_pipeline_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run full pipeline: discover → analyze → execute (live orders)."""
+    await _run_script_cron(update, "pipeline-execute", "Pipeline discover → analyze → execute")
+    # Send execution results if available
+    proposals_path = ROOT / ".trader" / "pipeline" / "proposals.json"
+    try:
+        from trader.pipeline.models import ProposalSet
+        ps = ProposalSet.model_validate_json(
+            await asyncio.to_thread(proposals_path.read_text)
+        )
+    except (FileNotFoundError, Exception):
+        return
+    lines = [f"<b>Pipeline executed</b> — {ps.regime.upper()} regime, {ps.total_proposals} proposals\n"]
+    for sector, sp in ps.sectors.items():
+        if not sp.proposals:
+            continue
+        lines.append(f"\n<b>{sector}</b>")
+        for p in sp.proposals:
+            status = getattr(p, "status", "unknown")
+            price_str = f" @ ${p.order.price:.2f}" if p.order.price else ""
+            lines.append(f"  {p.direction.upper()} {p.ticker}{price_str} — {status}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
 
 # ── Message handler ───────────────────────────────────────────────────────────
 
@@ -522,6 +546,7 @@ def build_telegram_app() -> Application:
     app.add_handler(CommandHandler("healthcheck", _handle_healthcheck))
     app.add_handler(CommandHandler("signals", _handle_signals))
     app.add_handler(CommandHandler("pipeline", _handle_pipeline))
+    app.add_handler(CommandHandler("pipeline_execute", _handle_pipeline_execute))
     # Admin
     app.add_handler(CommandHandler("users", _handle_users))
     app.add_handler(CommandHandler("adduser", _handle_adduser))

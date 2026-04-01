@@ -23,7 +23,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _get_watchlist_path() -> Path:
-    return _ROOT / "outputs" / "watchlists.json"
+    return _ROOT / ".trader" / "watchlists.json"
 
 
 def _get_pipeline_dir() -> Path:

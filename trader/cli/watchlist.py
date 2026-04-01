@@ -6,15 +6,18 @@ import click
 from trader.adapters.factory import get_adapter
 from trader.cli.__main__ import output_json
 
-# Storage: outputs/watchlists.json
+# Storage: .trader/watchlists.json  (persistent volume in Docker)
 # Format:
 #   {"default": {"tickers": ["NVDA","AAPL"], "sectors": {"NVDA": "Technology"}}}
 # Legacy format (plain list) is auto-migrated on load.
 
-def _wl_path(ctx) -> Path:
-    output_dir = Path(ctx.find_root().obj.get("output_dir", "outputs"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir / "watchlists.json"
+_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _wl_path(ctx=None) -> Path:
+    wl_dir = _ROOT / ".trader"
+    wl_dir.mkdir(parents=True, exist_ok=True)
+    return wl_dir / "watchlists.json"
 
 def _load(ctx) -> dict:
     p = _wl_path(ctx)
@@ -60,7 +63,7 @@ def watchlist():
       trader watchlist show 52wk-highs --strategy rsi
       trader watchlist from-scan HIGH_VS_52W_HL --ema200-above --list 52wk-highs
 
-    Stored in: outputs/watchlists.json
+    Stored in: .trader/watchlists.json
     """
 
 

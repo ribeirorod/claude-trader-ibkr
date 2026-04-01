@@ -47,7 +47,7 @@ TTL_HOURS = 4.0
 PER_TICKER_LIMIT = 5
 DELAY_BETWEEN_TICKERS = 1.0
 
-WATCHLIST_PATH = ROOT / "outputs" / "watchlists.json"
+WATCHLIST_PATH = ROOT / ".trader" / "watchlists.json"
 CACHE_PATH = ROOT / ".trader" / "pipeline" / "news-cache.json"
 
 

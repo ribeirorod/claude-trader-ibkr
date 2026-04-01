@@ -47,7 +47,7 @@ Account:
   uv run trader account balance
   uv run trader account margin
 
-Watchlists (stored in outputs/watchlists.json):
+Watchlists (stored in .trader/watchlists.json):
   uv run trader watchlist list
   uv run trader watchlist add TICKER [TICKER ...] [--list name]
   uv run trader watchlist remove TICKER [--list name]
@@ -101,7 +101,7 @@ Logs & state:
   tail -N .trader/logs/agent.jsonl
   tail -N .trader/logs/portfolio_evolution.jsonl
   cat .trader/profile.json
-  cat outputs/watchlists.json
+  cat .trader/watchlists.json
 
 ━━━ WEB RESEARCH ━━━
 
