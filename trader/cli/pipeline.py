@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -167,6 +168,33 @@ def analyze(ctx, regime: str | None, consensus: int, watchlist_consensus: int):
     output_json(result)
 
 
+_AGENT_LOG = Path(__file__).resolve().parent.parent.parent / ".trader" / "logs" / "agent.jsonl"
+
+
+def _log_order_intent(proposal, order_req: OrderRequest, regime: str) -> None:
+    """Append an ORDER_INTENT entry to agent.jsonl so conductor tracks it."""
+    entry = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "run_id": f"pipeline-execute-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "agent": "pipeline",
+        "event": "ORDER_INTENT",
+        "ticker": proposal.ticker,
+        "action": order_req.side,
+        "shares": order_req.qty,
+        "type": order_req.order_type,
+        "price": order_req.price,
+        "stop": order_req.stop_loss,
+        "sector": proposal.sector,
+        "reason": f"Pipeline execute. {regime.upper()} regime, {proposal.consensus}/6 consensus, {proposal.conviction} conviction.",
+    }
+    try:
+        _AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_AGENT_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as exc:
+        logger.warning("Failed to log ORDER_INTENT: %s", exc)
+
+
 @pipeline.command()
 @click.option(
     "--max-orders",
@@ -315,6 +343,7 @@ def execute(ctx, max_orders: int, dry_run: bool):
                             "status": "placed",
                             "order_response": resp if isinstance(resp, dict) else resp.model_dump() if hasattr(resp, "model_dump") else str(resp),
                         })
+                        _log_order_intent(p, order_req, proposal_set.regime)
                     except Exception as exc:
                         results.append({
                             "ticker": p.ticker,
