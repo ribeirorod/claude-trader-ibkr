@@ -32,6 +32,7 @@ _MAX_POSITION_PCT = 10.0
 # Minimum price for candidates (filter out penny stocks with unreliable signals)
 _MIN_PRICE = 1.0
 
+from trader.market.inverse_etfs import load_inverse_map, find_inverse
 from trader.market.ticker_map import resolve_yf_ticker as _resolve_yf_ticker
 
 
@@ -177,6 +178,8 @@ def run_analyze(
     all_proposals: list[Proposal] = []
 
     option_expiry = _next_monthly_expiry(min_dte=30)
+    inverse_map = load_inverse_map()
+    inverse_max_pct = inverse_map.get("usage_rules", {}).get("max_portfolio_pct", 10)
 
     for sector_name, candidates in cs.sectors.items():
         for candidate in candidates:
@@ -342,6 +345,46 @@ def run_analyze(
                     )
                     position_value = entry_price * qty
                     pct_of_nlv = (position_value / account_value * 100) if account_value > 0 else 0
+
+                # --- Inverse ETF companion proposal ---
+                inv_ticker = find_inverse(
+                    candidate.ticker, inverse_map, sector=resolved_sector
+                )
+                if inv_ticker:
+                    inv_qty = max(1, qty)
+                    inv_value = entry_price * inv_qty
+                    inv_pct = (inv_value / account_value * 100) if account_value > 0 else 0
+                    if inv_pct > inverse_max_pct:
+                        inv_qty = max(1, int(account_value * inverse_max_pct / 100 / entry_price))
+                        inv_value = entry_price * inv_qty
+                        inv_pct = (inv_value / account_value * 100) if account_value > 0 else 0
+                    inv_order = ProposalOrder(
+                        side="buy",
+                        order_type="limit",
+                        contract_type="etf",
+                        qty=inv_qty,
+                        price=round(entry_price, 2),
+                    )
+                    inv_sizing = ProposalSizing(
+                        atr=round(current_atr, 4),
+                        risk_per_share=round(abs(risk_per_share), 4),
+                        position_value=round(inv_value, 2),
+                        pct_of_nlv=round(inv_pct, 2),
+                    )
+                    all_proposals.append(Proposal(
+                        rank=0,
+                        ticker=inv_ticker,
+                        source=candidate.source,
+                        direction="hedge",
+                        consensus=consensus,
+                        strategies_agree=agree,
+                        strategies_disagree=disagree,
+                        conviction="medium",
+                        order=inv_order,
+                        sizing=inv_sizing,
+                        news_context=f"Inverse ETF for {candidate.ticker}",
+                        sector=resolved_sector,
+                    ))
 
             # Conviction scoring
             if consensus >= 5:

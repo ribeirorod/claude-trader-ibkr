@@ -34,6 +34,10 @@ YF_TICKER_MAP: dict[str, str] = {
     "XSPD": "DXS3.DE",
     "XISP": "XISP.L",
     "DSPX": "DSPX.L",
+    "XISX": "DBPD.DE",
+    "SUK2": "SUK2.L",
+    "SEU5": "DXS5.DE",
+    "SQQQ": "SQQQ.L",
     # --- European defense / industrials ---
     "RHM": "RHM.DE",
     "BA.": "BA.L",

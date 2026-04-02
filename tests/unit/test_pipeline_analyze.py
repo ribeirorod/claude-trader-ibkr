@@ -227,3 +227,79 @@ def test_analyze_passes_interval_to_fetch(tmp_path):
         call_kwargs = mock_fetch.call_args
         assert call_kwargs[1].get("interval") == "4h" or (len(call_kwargs[0]) >= 3 and call_kwargs[0][2] == "4h"), \
             f"Expected interval='4h' in call: {call_kwargs}"
+
+
+def test_analyze_bearish_signal_produces_inverse_etf_proposal(tmp_path):
+    """When a bearish signal fires on a mapped ticker, an inverse ETF proposal is added."""
+    cs = _make_candidate_set([("CSPX", "watchlist", "ETF")])
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "candidates.json").write_text(cs.model_dump_json())
+
+    def _all_sell(df, sector, regime="bull"):
+        return {"rsi": -1, "macd": -1, "ma_cross": -1, "bnf": -1, "momentum": -1, "pullback": -1}
+
+    inverse_map = {
+        "index_hedges": {
+            "SP500": {"ticker": "XISX", "leverage": -1},
+        },
+        "sector_hedges": {},
+        "usage_rules": {"max_hold_days": 20, "max_portfolio_pct": 10},
+    }
+
+    with (
+        patch("trader.pipeline.analyze._fetch_ohlcv", return_value=_make_ohlcv(trend="down")),
+        patch("trader.pipeline.analyze._run_all_strategies", side_effect=_all_sell),
+        patch("trader.pipeline.analyze.load_inverse_map", return_value=inverse_map),
+    ):
+        result = run_analyze(
+            pipeline_dir=pipeline_dir,
+            regime="bull",
+            account_value=100_000.0,
+            existing_positions=[],
+            open_orders=[],
+            consensus_threshold=1,
+            watchlist_consensus_threshold=1,
+        )
+
+    all_proposals = [p for sp in result.sectors.values() for p in sp.proposals]
+    inverse_proposals = [p for p in all_proposals if p.ticker == "XISX"]
+    assert len(inverse_proposals) == 1, (
+        f"Expected 1 inverse ETF proposal for XISX, got {len(inverse_proposals)}. "
+        f"All proposals: {[(p.ticker, p.direction, p.order.contract_type) for p in all_proposals]}"
+    )
+    inv = inverse_proposals[0]
+    assert inv.order.side == "buy"
+    assert inv.order.contract_type == "etf"
+    assert inv.direction == "hedge"
+
+
+def test_analyze_unmapped_ticker_no_inverse_proposal(tmp_path):
+    """A bearish signal on an unmapped ticker should NOT produce an inverse ETF proposal."""
+    cs = _make_candidate_set([("RANDOMTICKER", "watchlist", "Technology")])
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "candidates.json").write_text(cs.model_dump_json())
+
+    def _all_sell(df, sector, regime="bull"):
+        return {"rsi": -1, "macd": -1, "ma_cross": -1, "bnf": -1, "momentum": -1, "pullback": -1}
+
+    with (
+        patch("trader.pipeline.analyze._fetch_ohlcv", return_value=_make_ohlcv(trend="down")),
+        patch("trader.pipeline.analyze._run_all_strategies", side_effect=_all_sell),
+        patch("trader.pipeline.analyze.load_inverse_map", return_value={}),
+    ):
+        result = run_analyze(
+            pipeline_dir=pipeline_dir,
+            regime="bull",
+            account_value=100_000.0,
+            existing_positions=[],
+            open_orders=[],
+            consensus_threshold=1,
+            watchlist_consensus_threshold=1,
+        )
+
+    all_proposals = [p for sp in result.sectors.values() for p in sp.proposals]
+    inverse_tickers = {"XISX", "SQQQ", "SEU5", "SUK2", "XSPS"}
+    inverse_proposals = [p for p in all_proposals if p.ticker in inverse_tickers]
+    assert len(inverse_proposals) == 0
