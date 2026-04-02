@@ -35,9 +35,9 @@ _MIN_PRICE = 1.0
 from trader.market.ticker_map import resolve_yf_ticker as _resolve_yf_ticker
 
 
-def _fetch_ohlcv(ticker: str, period: str = "90d") -> pd.DataFrame:
+def _fetch_ohlcv(ticker: str, period: str = "90d", interval: str = "1d") -> pd.DataFrame:
     """Fetch OHLCV data via yfinance. Separate function for easy mocking."""
-    df = yf.download(_resolve_yf_ticker(ticker), period=period, progress=False, auto_adjust=True)
+    df = yf.download(_resolve_yf_ticker(ticker), period=period, interval=interval, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df.columns = [c.lower() for c in df.columns]
@@ -87,6 +87,16 @@ def _run_all_strategies(
     return results
 
 
+_INTERVAL_PERIOD: dict[str, str] = {
+    "1m": "7d",
+    "5m": "30d",
+    "15m": "30d",
+    "1h": "30d",
+    "4h": "30d",
+    "1d": "90d",
+}
+
+
 def run_analyze(
     pipeline_dir: Path,
     regime: str,
@@ -96,6 +106,7 @@ def run_analyze(
     consensus_threshold: int | None = None,
     watchlist_consensus_threshold: int | None = None,
     paper_mode: bool = False,
+    interval: str = "1d",
 ) -> ProposalSet:
     """Analyze candidates and produce ranked trade proposals.
 
@@ -133,6 +144,8 @@ def run_analyze(
             else _default_watchlist
         )
 
+    period = _INTERVAL_PERIOD.get(interval, "90d")
+
     candidates_path = pipeline_dir / "candidates.json"
     cs = CandidateSet.model_validate_json(candidates_path.read_text())
     ticker_sentiment = cs.ticker_sentiment  # {ticker: float}
@@ -168,7 +181,7 @@ def run_analyze(
     for sector_name, candidates in cs.sectors.items():
         for candidate in candidates:
             try:
-                df = _fetch_ohlcv(candidate.ticker)
+                df = _fetch_ohlcv(candidate.ticker, period=period, interval=interval)
                 if df.empty or len(df) < 30:
                     continue
             except Exception:

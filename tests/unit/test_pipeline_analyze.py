@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 import pandas as pd
 import numpy as np
-from trader.pipeline.analyze import run_analyze
+from trader.pipeline.analyze import run_analyze, _fetch_ohlcv
 from trader.pipeline.models import Candidate, CandidateNews, CandidateSet, ProposalSet
 
 
@@ -187,3 +187,43 @@ def test_analyze_bear_regime_uses_regime_thresholds(tmp_path):
     mock_thresholds.assert_called_once_with("bear")
     total = sum(len(sp.proposals) for sp in result.sectors.values())
     assert total == 0, f"Expected 0 proposals with regime threshold=5, got {total}"
+
+
+def test_fetch_ohlcv_passes_interval(tmp_path):
+    """_fetch_ohlcv should forward the interval parameter to yf.download."""
+    with patch("trader.pipeline.analyze.yf.download") as mock_dl:
+        mock_dl.return_value = pd.DataFrame({
+            "Open": [100], "High": [102], "Low": [98],
+            "Close": [101], "Volume": [1_000_000],
+        }, index=pd.date_range("2026-04-01", periods=1, freq="h"))
+
+        _fetch_ohlcv("AAPL", period="30d", interval="4h")
+
+        mock_dl.assert_called_once_with(
+            "AAPL", period="30d", interval="4h",
+            progress=False, auto_adjust=True,
+        )
+
+
+def test_analyze_passes_interval_to_fetch(tmp_path):
+    """run_analyze should forward interval to _fetch_ohlcv with adjusted period."""
+    cs = _make_candidate_set([("AAPL", "watchlist", "Technology")])
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "candidates.json").write_text(cs.model_dump_json())
+
+    with patch("trader.pipeline.analyze._fetch_ohlcv", return_value=_make_ohlcv(trend="up")) as mock_fetch:
+        run_analyze(
+            pipeline_dir=pipeline_dir,
+            regime="bull",
+            account_value=100_000.0,
+            existing_positions=[],
+            open_orders=[],
+            consensus_threshold=2,
+            watchlist_consensus_threshold=1,
+            interval="4h",
+        )
+
+        call_kwargs = mock_fetch.call_args
+        assert call_kwargs[1].get("interval") == "4h" or (len(call_kwargs[0]) >= 3 and call_kwargs[0][2] == "4h"), \
+            f"Expected interval='4h' in call: {call_kwargs}"
