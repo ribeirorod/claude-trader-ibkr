@@ -14,7 +14,7 @@ from trader.pipeline.models import (
     ProposalSet, SectorProposals, VixContext,
 )
 from trader.market.vix import vix_gate
-from trader.strategies.factory import get_strategy, list_strategies
+from trader.strategies.factory import get_strategy, list_strategies, get_regime_thresholds
 from trader.strategies.risk_filter import RiskFilter
 from trader.strategies.stop_loss import (
     atr as compute_atr,
@@ -93,8 +93,8 @@ def run_analyze(
     account_value: float,
     existing_positions: list[Position],
     open_orders: list[Order],
-    consensus_threshold: int = 3,
-    watchlist_consensus_threshold: int = 2,
+    consensus_threshold: int | None = None,
+    watchlist_consensus_threshold: int | None = None,
     paper_mode: bool = False,
 ) -> ProposalSet:
     """Analyze candidates and produce ranked trade proposals.
@@ -116,6 +116,23 @@ def run_analyze(
     watchlist_consensus_threshold : int
         Minimum strategies agreeing for watchlist candidates (default 2/6)
     """
+    # Resolve consensus thresholds: CLI explicit > regime config > hardcoded defaults
+    _default_discovery = 3
+    _default_watchlist = 2
+    regime_thresholds = get_regime_thresholds(regime)
+    if consensus_threshold is None:
+        consensus_threshold = (
+            regime_thresholds["discovery"]
+            if regime_thresholds and "discovery" in regime_thresholds
+            else _default_discovery
+        )
+    if watchlist_consensus_threshold is None:
+        watchlist_consensus_threshold = (
+            regime_thresholds["watchlist"]
+            if regime_thresholds and "watchlist" in regime_thresholds
+            else _default_watchlist
+        )
+
     candidates_path = pipeline_dir / "candidates.json"
     cs = CandidateSet.model_validate_json(candidates_path.read_text())
     ticker_sentiment = cs.ticker_sentiment  # {ticker: float}

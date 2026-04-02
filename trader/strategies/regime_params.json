@@ -1,6 +1,13 @@
 {
   "bear": {
+    "_thresholds": {"discovery": 3, "watchlist": 2},
     "rsi": {"period": 9, "oversold": 20, "overbought": 60},
     "macd": {"fast": 5, "slow": 13, "signal": 5}
+  },
+  "caution": {
+    "_thresholds": {"discovery": 3, "watchlist": 2}
+  },
+  "bull": {
+    "_thresholds": {"discovery": 3, "watchlist": 2}
   }
 }

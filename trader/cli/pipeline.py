@@ -99,16 +99,14 @@ def discover(ctx, regime: str | None):
 @click.option(
     "--consensus",
     type=int,
-    default=3,
-    show_default=True,
-    help="Minimum strategy consensus for discovery candidates.",
+    default=None,
+    help="Minimum strategy consensus for discovery candidates. Default: from regime config or 3.",
 )
 @click.option(
     "--watchlist-consensus",
     type=int,
-    default=2,
-    show_default=True,
-    help="Minimum strategy consensus for watchlist candidates.",
+    default=None,
+    help="Minimum strategy consensus for watchlist candidates. Default: from regime config or 2.",
 )
 @click.pass_context
 def analyze(ctx, regime: str | None, consensus: int, watchlist_consensus: int):
@@ -380,10 +378,10 @@ def execute(ctx, max_orders: int, dry_run: bool):
 @pipeline.command()
 @click.option("--regime", type=click.Choice(["bull", "caution", "bear"]), default=None,
               help="Market regime override. Auto-detected if omitted.")
-@click.option("--consensus", type=int, default=3, show_default=True,
-              help="Minimum strategy consensus for discovery candidates.")
-@click.option("--watchlist-consensus", type=int, default=2, show_default=True,
-              help="Minimum strategy consensus for watchlist candidates.")
+@click.option("--consensus", type=int, default=None,
+              help="Minimum strategy consensus for discovery candidates. Default: from regime config or 3.")
+@click.option("--watchlist-consensus", type=int, default=None,
+              help="Minimum strategy consensus for watchlist candidates. Default: from regime config or 2.")
 @click.option("--max-orders", type=int, default=5, show_default=True,
               help="Maximum number of proposals to execute.")
 @click.option("--dry", "dry_run", is_flag=True, default=False,

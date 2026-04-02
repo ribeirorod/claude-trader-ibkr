@@ -67,6 +67,19 @@ def get_regime_params(regime: str, strategy_name: str) -> dict | None:
     return regime_entry.get(strategy_name.lower())
 
 
+def get_regime_thresholds(regime: str) -> dict | None:
+    """Return consensus threshold overrides for a regime, or None if not configured.
+
+    Returns a dict like {"discovery": 3, "watchlist": 2} read from the
+    ``_thresholds`` key in regime_params.json.
+    """
+    rp = _load_regime_params()
+    regime_entry = rp.get(regime.lower())
+    if not regime_entry:
+        return None
+    return regime_entry.get("_thresholds")
+
+
 def get_strategy(
     name: str,
     params: dict | None = None,

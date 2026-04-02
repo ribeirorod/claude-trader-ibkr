@@ -165,3 +165,25 @@ def test_analyze_filters_on_bearish_sentiment(tmp_path):
     assert "BADNEWS" not in long_tickers, (
         "Bearish sentiment (score=-0.5) should filter out long proposals"
     )
+
+
+def test_analyze_bear_regime_uses_regime_thresholds(tmp_path):
+    """Bear regime should use thresholds from regime_params.json when CLI doesn't override."""
+    cs = _make_candidate_set([("AAPL", "watchlist", "Technology")])
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "candidates.json").write_text(cs.model_dump_json())
+
+    with patch("trader.pipeline.analyze._fetch_ohlcv", return_value=_make_ohlcv(trend="up")), \
+         patch("trader.pipeline.analyze.get_regime_thresholds", return_value={"discovery": 5, "watchlist": 5}) as mock_thresholds:
+        result = run_analyze(
+            pipeline_dir=pipeline_dir,
+            regime="bear",
+            account_value=100_000.0,
+            existing_positions=[],
+            open_orders=[],
+        )
+
+    mock_thresholds.assert_called_once_with("bear")
+    total = sum(len(sp.proposals) for sp in result.sectors.values())
+    assert total == 0, f"Expected 0 proposals with regime threshold=5, got {total}"

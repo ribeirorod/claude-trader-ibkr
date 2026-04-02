@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 from trader.strategies.factory import (
     get_strategy, get_sector_params, _load_sector_params, _SECTOR_PARAMS_FILE,
+    get_regime_thresholds,
 )
 from trader.strategies.rsi import RSIStrategy
 from trader.strategies.macd import MACDStrategy
@@ -143,3 +144,42 @@ def test_sector_params_write_back(tmp_path, monkeypatch):
     params = get_sector_params("Technology", "rsi")
     assert params["period"] == 21
     assert params["oversold"] == 25
+
+
+# ── Regime thresholds ──────────────────────────────────────────────────────
+
+def test_get_regime_thresholds_bear():
+    import trader.strategies.factory as mod
+    mod._regime_cache = None  # force reload
+    thresholds = get_regime_thresholds("bear")
+    assert thresholds == {"discovery": 3, "watchlist": 2}
+
+
+def test_get_regime_thresholds_bull():
+    import trader.strategies.factory as mod
+    mod._regime_cache = None
+    thresholds = get_regime_thresholds("bull")
+    assert thresholds == {"discovery": 3, "watchlist": 2}
+
+
+def test_get_regime_thresholds_caution():
+    import trader.strategies.factory as mod
+    mod._regime_cache = None
+    thresholds = get_regime_thresholds("caution")
+    assert thresholds == {"discovery": 3, "watchlist": 2}
+
+
+def test_get_regime_thresholds_unknown_regime():
+    import trader.strategies.factory as mod
+    mod._regime_cache = None
+    thresholds = get_regime_thresholds("unknown")
+    assert thresholds is None
+
+
+def test_get_regime_thresholds_case_insensitive():
+    import trader.strategies.factory as mod
+    mod._regime_cache = None
+    t1 = get_regime_thresholds("bear")
+    mod._regime_cache = None
+    t2 = get_regime_thresholds("BEAR")
+    assert t1 == t2

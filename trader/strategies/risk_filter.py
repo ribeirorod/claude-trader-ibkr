@@ -45,6 +45,11 @@ class RiskFilter:
             if sentiment and sentiment.score > abs(min_sentiment):
                 return {"signal": 0, "filtered": True, "filter_reason": "sentiment_bullish"}
         else:
+            # Bear regime sentiment gate: require positive sentiment for longs
+            if regime == "bear":
+                if sentiment is None or sentiment.score <= 0.1:
+                    return {"signal": 0, "filtered": True, "filter_reason": "bear_sentiment_gate"}
+
             # Long-side filters (original behavior)
             if dividend_calendar is not None and ticker:
                 if dividend_calendar.is_near_ex_div(ticker, within_days=ex_div_within_days):
