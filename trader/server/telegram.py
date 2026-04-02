@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import traceback
 from datetime import datetime
@@ -153,7 +154,10 @@ async def _handle_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/bod — beginning-of-day report\n"
         "/eod — end-of-day report\n"
         "/healthcheck — IBKR session health check\n"
-        f"/signals — watchlist signals scan{admin}\n\n"
+        "/signals — watchlist signals scan\n"
+        "/pipeline — run discover → analyze (dry)\n"
+        "/pipeline_execute — run discover → analyze → execute (live)\n"
+        f"/adjust — adjust stops &amp; targets on all positions (moving bracket){admin}\n\n"
         "Or just send any message, voice note, image, or file.",
         parse_mode=ParseMode.HTML,
     )
@@ -230,11 +234,25 @@ async def _handle_reauth(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     """User-triggered IBKR re-authentication. Runs Playwright login + MFA flow."""
     if not _is_owner(update):
         return
-    import subprocess, sys
+    import subprocess, sys, time as _time
     reauth_script = ROOT / "scripts" / "ibkr-reauth.py"
     if not reauth_script.exists():
         await update.message.reply_text("reauth script not found.")
         return
+    # Prevent concurrent reauth — check lock file
+    lock_file = ROOT / ".trader" / "reauth.lock"
+    if lock_file.exists():
+        try:
+            lock_age = _time.time() - float(lock_file.read_text().strip())
+            if lock_age < 180:
+                await update.message.reply_text(
+                    "⏳ Reauth already in progress. Wait for it to finish or try again in a few minutes.",
+                )
+                return
+        except Exception:
+            pass
+    # Clear stale MFA code before starting
+    MFA_CODE_FILE.unlink(missing_ok=True)
     await update.message.reply_text(
         "🔐 <b>Starting IBKR re-authentication...</b>\n\n"
         "You will be asked for your MFA code shortly.",
@@ -307,7 +325,7 @@ async def _run_script_cron(update: Update, job_id: str, label: str) -> None:
     """Trigger a system script cron job."""
     if not _is_owner(update):
         return
-    import json, subprocess, sys
+    import shlex
     crons_path = ROOT / ".claude" / "crons.json"
     try:
         jobs = json.loads(crons_path.read_text())
@@ -318,7 +336,6 @@ async def _run_script_cron(update: Update, job_id: str, label: str) -> None:
         await update.message.reply_text(f"Cron job '{job_id}' not found.")
         return
     await update.message.reply_text(f"Running <b>{label}</b>...", parse_mode=ParseMode.HTML)
-    import shlex
     args = shlex.split(job["cmd"])
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -369,6 +386,88 @@ async def _handle_healthcheck(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
 async def _handle_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _run_script_cron(update, "watchlist-signals-morning", "Watchlist signals scan")
+
+async def _handle_pipeline(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run pipeline discover → analyze (dry run) and report proposals."""
+    await _run_script_cron(update, "pipeline-dry", "Pipeline discover → analyze")
+    # Send a proposals summary if available
+    proposals_path = ROOT / ".trader" / "pipeline" / "proposals.json"
+    try:
+        from trader.pipeline.models import ProposalSet
+        ps = ProposalSet.model_validate_json(
+            await asyncio.to_thread(proposals_path.read_text)
+        )
+    except (FileNotFoundError, Exception):
+        return
+    lines = [f"<b>Pipeline complete</b> — {ps.regime.upper()} regime, {ps.total_proposals} proposals\n"]
+    for sector, sp in ps.sectors.items():
+        if not sp.proposals:
+            continue
+        lines.append(f"\n<b>{sector}</b>")
+        for p in sp.proposals:
+            price_str = f" @ ${p.order.price:.2f}" if p.order.price else ""
+            lines.append(f"  {p.direction.upper()} {p.ticker}{price_str} — {p.consensus}/6 consensus, {p.conviction}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+async def _handle_adjust(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Adjust stops and targets on all open positions based on current ATR and regime."""
+    if not _is_owner(update):
+        return
+    await update.message.reply_text("Adjusting position brackets...", parse_mode=ParseMode.HTML)
+    chat_id = str(update.effective_chat.id)
+    stop_ev = asyncio.Event()
+    typing_task = asyncio.create_task(_keep_typing(update, stop_ev))
+    prompt = (
+        "Adjust stops and take-profits on ALL open positions. This is a moving bracket adjustment.\n\n"
+        "Steps:\n"
+        "1. Run `uv run trader market regime` to get current regime (bull/caution/bear)\n"
+        "2. Run `uv run trader positions list` and `uv run trader positions pnl` to get all positions\n"
+        "3. Run `uv run trader orders list --status open` to see existing stop/limit orders\n"
+        "4. For EACH position with shares > 0:\n"
+        "   a. Fetch current price and compute ATR(14) via `uv run trader strategies signals --tickers TICKER --strategy rsi`\n"
+        "   b. Determine regime-adjusted ATR multiplier: bull=2.0, caution=1.5, bear=1.0\n"
+        "   c. New stop = current_price - (ATR × multiplier). Never lower a stop — only raise it (trailing behavior)\n"
+        "   d. New take-profit = current_price + (ATR × multiplier × 2). Only raise if price has moved up\n"
+        "   e. If existing stop order exists, modify it with `uv run trader orders modify ORDER_ID --price NEW_STOP`\n"
+        "   f. If no stop exists, create one with `uv run trader orders stop TICKER --price NEW_STOP`\n"
+        "   g. Similarly for take-profit orders\n"
+        "5. Report a summary table: ticker, old stop → new stop, old target → new target, regime, ATR\n\n"
+        "IMPORTANT: Stops must only move UP (for longs) — never widen a stop. "
+        "This is a trailing bracket that locks in gains as the trend moves."
+    )
+    try:
+        response = await agent.ask(prompt, chat_id=chat_id)
+        await _send_response(update, response)
+    except Exception as exc:
+        await update.message.reply_text(f"Error: {exc}")
+    finally:
+        stop_ev.set()
+        typing_task.cancel()
+
+
+async def _handle_pipeline_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run full pipeline: discover → analyze → execute (live orders)."""
+    await _run_script_cron(update, "pipeline-execute", "Pipeline discover → analyze → execute")
+    # Send execution results if available
+    proposals_path = ROOT / ".trader" / "pipeline" / "proposals.json"
+    try:
+        from trader.pipeline.models import ProposalSet
+        ps = ProposalSet.model_validate_json(
+            await asyncio.to_thread(proposals_path.read_text)
+        )
+    except (FileNotFoundError, Exception):
+        return
+    lines = [f"<b>Pipeline executed</b> — {ps.regime.upper()} regime, {ps.total_proposals} proposals\n"]
+    for sector, sp in ps.sectors.items():
+        if not sp.proposals:
+            continue
+        lines.append(f"\n<b>{sector}</b>")
+        for p in sp.proposals:
+            contract = p.order.contract_type
+            price_str = f" @ ${p.order.price:.2f}" if p.order.price else ""
+            extra = f" {p.order.right.upper()} {p.order.expiry}" if contract == "option" and p.order.right else ""
+            lines.append(f"  {p.direction.upper()} {p.ticker}{price_str}{extra} — {p.consensus}/6, {p.conviction}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 # ── Message handler ───────────────────────────────────────────────────────────
@@ -484,6 +583,9 @@ def build_telegram_app() -> Application:
     app.add_handler(CommandHandler("eod", _handle_eod))
     app.add_handler(CommandHandler("healthcheck", _handle_healthcheck))
     app.add_handler(CommandHandler("signals", _handle_signals))
+    app.add_handler(CommandHandler("pipeline", _handle_pipeline))
+    app.add_handler(CommandHandler("pipeline_execute", _handle_pipeline_execute))
+    app.add_handler(CommandHandler("adjust", _handle_adjust))
     # Admin
     app.add_handler(CommandHandler("users", _handle_users))
     app.add_handler(CommandHandler("adduser", _handle_adduser))

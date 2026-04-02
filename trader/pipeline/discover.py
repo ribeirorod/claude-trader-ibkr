@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from trader.models import ScanResult
+from trader.news.sentiment import SentimentScorer, _score_item
 from trader.pipeline.models import Candidate, CandidateNews, CandidateSet, GeoContext
 
 
@@ -174,8 +175,10 @@ async def _enrich_with_news(
     sectors: dict[str, list[Candidate]],
     news_fn: Callable,
     top_n: int = 20,
-) -> dict[str, list[Candidate]]:
-    """Enrich top candidates with news."""
+    cache_path: Path | None = None,
+    cache_ttl_hours: float = 4.0,
+) -> tuple[dict[str, list[Candidate]], dict[str, float]]:
+    """Enrich top candidates with news and compute per-ticker sentiment."""
     # Flatten, sort by priority then scan_score
     all_candidates = [c for cands in sectors.values() for c in cands]
     all_candidates.sort(
@@ -184,20 +187,59 @@ async def _enrich_with_news(
     top_tickers = [c.ticker for c in all_candidates[:top_n]]
 
     if not top_tickers:
-        return sectors
+        return sectors, {}
 
-    try:
-        news_items = await news_fn(tickers=top_tickers, limit=3)
-    except Exception:
-        return sectors
+    # Try cache first, then live API for misses
+    all_news_items: list = []
+    cache_misses: list[str] = []
 
-    # Index news by ticker
-    news_by_ticker: dict[str, list[CandidateNews]] = {}
+    if cache_path:
+        from trader.news.cache import read_cache
+        for ticker in top_tickers:
+            cached = read_cache(cache_path, ticker, ttl_hours=cache_ttl_hours)
+            if cached:
+                all_news_items.extend(cached)
+            else:
+                cache_misses.append(ticker)
+    else:
+        cache_misses = top_tickers
+
+    # Fetch remaining from live API
+    if cache_misses:
+        try:
+            live_items = await news_fn(tickers=cache_misses, limit=5 * len(cache_misses))
+            all_news_items.extend(live_items)
+        except Exception:
+            pass
+
+    news_items = all_news_items
+
+    if not news_items:
+        return sectors, {}
+
+    # Group raw NewsItems by ticker for SentimentScorer
+    from trader.models import NewsItem
+    raw_by_ticker: dict[str, list[NewsItem]] = {}
     for item in news_items:
         ticker = getattr(item, "ticker", None)
         if ticker:
+            raw_by_ticker.setdefault(ticker, []).append(item)
+
+    # Compute per-ticker aggregate sentiment
+    scorer = SentimentScorer()
+    ticker_sentiment: dict[str, float] = {}
+    for ticker, items in raw_by_ticker.items():
+        result = scorer.score(ticker=ticker, items=items)
+        ticker_sentiment[ticker] = result.score
+
+    # Build per-headline CandidateNews with real sentiment scores
+    news_by_ticker: dict[str, list[CandidateNews]] = {}
+    for ticker, items in raw_by_ticker.items():
+        for item in items:
+            raw_score = _score_item(item)
+            clamped = max(-1.0, min(1.0, raw_score * 10))
             news_by_ticker.setdefault(ticker, []).append(
-                CandidateNews(headline=item.headline, sentiment=0.0)
+                CandidateNews(headline=item.headline, sentiment=clamped)
             )
 
     # Apply news to candidates
@@ -208,7 +250,7 @@ async def _enrich_with_news(
                     "news": news_by_ticker[c.ticker],
                 })
 
-    return sectors
+    return sectors, ticker_sentiment
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +324,7 @@ async def _scan_geo_context(news_fn: Callable) -> GeoContext:
         severity=severity,
         events=unique_events[:5],
         affected_sectors=sorted(affected),
-        block_new_longs=severity == "high",
+        raise_consensus_threshold=severity == "high",
         hedge_suggested=severity in ("high", "medium"),
     )
 
@@ -333,7 +375,10 @@ async def run_discover(
         _scan_geo_context(news_fn),
     )
     sectors = _merge_candidates(watchlist_candidates, scan_candidates)
-    sectors = await _enrich_with_news(sectors, news_fn)
+    cache_path = pipeline_dir / "news-cache.json"
+    sectors, ticker_sentiment = await _enrich_with_news(
+        sectors, news_fn, cache_path=cache_path,
+    )
 
     # 3. Build CandidateSet
     candidate_set = CandidateSet(
@@ -341,6 +386,7 @@ async def run_discover(
         regime=regime,
         sectors=sectors,
         geo_context=geo_context,
+        ticker_sentiment=ticker_sentiment,
     )
 
     # 4. Write candidates.json

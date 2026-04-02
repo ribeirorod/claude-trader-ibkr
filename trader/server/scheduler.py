@@ -5,17 +5,52 @@ import json
 import shlex
 import time
 from pathlib import Path
+from typing import Literal
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from trader.notify import send_telegram
 from trader.server.agent import run_job
 
 log = structlog.get_logger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CRONS_PATH = ROOT / ".claude" / "crons.json"
+
+# Jobs that run too frequently for completion notifications
+_SILENT_JOBS = {"ibkr-healthcheck"}
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as human-readable duration."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}m {secs:02d}s" if secs else f"{minutes}m"
+
+
+async def _notify_cron_result(
+    job_id: str,
+    status: Literal["ok", "timeout", "error"],
+    elapsed_s: float,
+    error: str | None = None,
+) -> None:
+    """Send a Telegram notification when a cron job finishes."""
+    if job_id in _SILENT_JOBS:
+        return
+    if status == "ok":
+        msg = f"Cron <b>{job_id}</b> finished in {_fmt_elapsed(elapsed_s)}"
+    elif status == "timeout":
+        msg = f"Cron <b>{job_id}</b> timed out after {_fmt_elapsed(elapsed_s)}"
+    elif status == "error":
+        reason = (error or "unknown")[:120]
+        msg = f"Cron <b>{job_id}</b> failed after {_fmt_elapsed(elapsed_s)} — {reason}"
+    else:
+        return
+    await asyncio.to_thread(send_telegram, msg)
 
 
 def load_crons(crons_path: Path = DEFAULT_CRONS_PATH) -> list[dict]:
@@ -48,12 +83,16 @@ async def _run_agent_job(job: dict) -> None:
             run_job(prompt=job["prompt"], slot=job.get("slot", jid)),
             timeout=timeout_min * 60,
         )
-        log.info("cron_done", job=jid, type="agent",
-                 elapsed_s=round(time.monotonic() - t0, 1))
+        elapsed = round(time.monotonic() - t0, 1)
+        log.info("cron_done", job=jid, type="agent", elapsed_s=elapsed)
+        await _notify_cron_result(jid, "ok", elapsed)
     except asyncio.TimeoutError:
         _log_timeout_error(jid, timeout_min)
+        await _notify_cron_result(jid, "timeout", timeout_min * 60)
     except Exception as exc:
+        elapsed = round(time.monotonic() - t0, 1)
         log.error("cron_error", job=jid, type="agent", error=str(exc))
+        await _notify_cron_result(jid, "error", elapsed, str(exc))
         raise
 
 
@@ -78,14 +117,18 @@ async def _run_script_job(job: dict) -> None:
         proc.kill()
         await proc.communicate()
         _log_timeout_error(jid, timeout_min)
+        await _notify_cron_result(jid, "timeout", timeout_min * 60)
         return
 
     elapsed = round(time.monotonic() - t0, 1)
     if proc.returncode != 0:
+        err_msg = stderr.decode(errors="replace")[:300]
         log.error("cron_error", job=jid, type="script", rc=proc.returncode,
-                  elapsed_s=elapsed, stderr=stderr.decode(errors="replace")[:300])
+                  elapsed_s=elapsed, stderr=err_msg)
+        await _notify_cron_result(jid, "error", elapsed, err_msg.split("\n")[-1][:120])
     else:
         log.info("cron_done", job=jid, type="script", elapsed_s=elapsed)
+        await _notify_cron_result(jid, "ok", elapsed)
 
 
 def build_scheduler(crons_path: Path = DEFAULT_CRONS_PATH) -> AsyncIOScheduler:

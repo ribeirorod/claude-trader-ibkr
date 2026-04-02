@@ -47,7 +47,7 @@ Account:
   uv run trader account balance
   uv run trader account margin
 
-Watchlists (stored in outputs/watchlists.json):
+Watchlists (stored in .trader/watchlists.json):
   uv run trader watchlist list
   uv run trader watchlist add TICKER [TICKER ...] [--list name]
   uv run trader watchlist remove TICKER [--list name]
@@ -57,11 +57,12 @@ Watchlists (stored in outputs/watchlists.json):
 Named watchlists — use these exact names:
   --list default        IBKR watchlist (scanned for signals automatically)
   --list tr-portfolio   Trade Republic holdings (monitor-only, no orders)
-  --list tr-watchlist   Trade Republic watchlist (monitor-only, no orders)
+
+To see ALL watchlists and their tickers, always run `trader watchlist list` first.
 
 Examples for natural language → CLI mapping:
   "add ASML to TR portfolio"     → trader watchlist add ASML --list tr-portfolio
-  "remove NVDA from TR watchlist"→ trader watchlist remove NVDA --list tr-watchlist
+  "remove NVDA from TR portfolio"→ trader watchlist remove NVDA --list tr-portfolio
   "show my TR portfolio"         → trader watchlist show tr-portfolio
   "what's on my IBKR watchlist"  → trader watchlist show default
 
@@ -90,6 +91,13 @@ Options (buying puts/calls):
   uv run trader orders buy TICKER QTY --contract-type option --right put --strike N --expiry YYYY-MM-DD --type limit --price N
   uv run trader orders buy TICKER QTY --contract-type option --right call --strike N --expiry YYYY-MM-DD --type limit --price N
 
+Position Bracket Adjustment (moving stops/targets):
+  For each position: compute ATR(14), apply regime multiplier (bull=2.0, caution=1.5, bear=1.0)
+  New stop = current_price - (ATR × multiplier). NEVER lower a stop — only raise (trailing).
+  New take-profit = current_price + (ATR × multiplier × 2). Only raise if price moved up.
+  Use: trader orders modify ORDER_ID --price NEW_PRICE (to adjust existing orders)
+  Use: trader orders stop TICKER --price PRICE (to create new stop if none exists)
+
 Notifications (progress updates to Telegram):
   uv run trader notify "message"
 
@@ -101,7 +109,7 @@ Logs & state:
   tail -N .trader/logs/agent.jsonl
   tail -N .trader/logs/portfolio_evolution.jsonl
   cat .trader/profile.json
-  cat outputs/watchlists.json
+  cat .trader/watchlists.json
 
 ━━━ WEB RESEARCH ━━━
 

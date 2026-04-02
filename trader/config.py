@@ -19,6 +19,9 @@ class Config:
     benzinga_api_key: str = field(default_factory=lambda: os.getenv("BENZINGA_API_KEY", ""))
     marketaux_api_key: str = field(default_factory=lambda: os.getenv("MARKETAUX_API_KEY", ""))
     massive_api_key: str = field(default_factory=lambda: os.getenv("MASSIVE_API_KEY", ""))
+    finnhub_api_key: str = field(default_factory=lambda: os.getenv("FINNHUB_API_KEY", ""))
+    alphavantage_api_key: str = field(default_factory=lambda: os.getenv("ALPHAVANTAGE_API_KEY", ""))
+    eodhd_api_key: str = field(default_factory=lambda: os.getenv("EODHD_API_KEY", ""))
     max_position_pct: float = field(default_factory=lambda: float(os.getenv("MAX_POSITION_PCT", "0.05")))
     regime_tickers: list = field(
         default_factory=lambda: os.getenv("REGIME_TICKERS", "SPY,QQQ").split(",")

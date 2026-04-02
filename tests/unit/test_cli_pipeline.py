@@ -80,3 +80,216 @@ def test_pipeline_analyze_command(tmp_path):
     data = json.loads(result.output)
     assert "regime" in data
     assert "total_proposals" in data
+
+
+def test_execute_rejects_when_guard_blocks(tmp_path):
+    """OrderGuard rejection produces status='guarded' with reason in output."""
+    from trader.pipeline.models import (
+        ProposalSet, SectorProposals, Proposal, ProposalOrder, ProposalSizing,
+    )
+    from trader.guard import GuardResult
+
+    runner = CliRunner()
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+
+    proposal_set = ProposalSet(
+        run_id="test-exec",
+        regime="bull",
+        available_capital=100_000.0,
+        sectors={
+            "Technology": SectorProposals(
+                summary="test",
+                proposals=[
+                    Proposal(
+                        rank=1,
+                        ticker="AAPL",
+                        source="discovery",
+                        direction="long",
+                        consensus=3,
+                        strategies_agree=["RSI", "MACD", "MACross"],
+                        conviction="high",
+                        order=ProposalOrder(
+                            side="buy",
+                            order_type="limit",
+                            contract_type="stock",
+                            qty=10,
+                            price=150.0,
+                            stop_loss=145.0,
+                            take_profit=160.0,
+                        ),
+                        sizing=ProposalSizing(
+                            atr=3.5,
+                            risk_per_share=5.0,
+                            position_value=1500.0,
+                            pct_of_nlv=0.015,
+                        ),
+                        sector="Technology",
+                    ),
+                ],
+            ),
+        },
+    )
+    (pipeline_dir / "proposals.json").write_text(proposal_set.model_dump_json())
+
+    mock_acct = MagicMock()
+    mock_acct.balance.net_liquidation = 100_000.0
+
+    guard_result = GuardResult(
+        allowed=False,
+        reason="daily_limit",
+        details={"today": 3, "max": 3},
+    )
+
+    with patch("trader.cli.pipeline._get_pipeline_dir", return_value=pipeline_dir), \
+         patch("trader.cli.pipeline.get_adapter") as mock_adapter_factory, \
+         patch("trader.cli.pipeline.OrderGuard") as mock_guard_cls:
+
+        mock_adapter = AsyncMock()
+        mock_adapter.get_account = AsyncMock(return_value=mock_acct)
+        mock_adapter.list_positions = AsyncMock(return_value=[])
+        mock_adapter.list_orders = AsyncMock(return_value=[])
+        mock_adapter_factory.return_value = mock_adapter
+
+        mock_guard = MagicMock()
+        mock_guard.validate.return_value = guard_result
+        mock_guard_cls.return_value = mock_guard
+
+        result = runner.invoke(cli, ["pipeline", "execute"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+
+    # The order should be guarded, not placed
+    assert data["guarded"] == 1
+    assert data["executed"] == 0
+    assert len(data["results"]) == 1
+    assert data["results"][0]["status"] == "guarded"
+    assert "daily_limit" in data["results"][0]["reason"]
+
+    # place_order should NOT have been called
+    mock_adapter.place_order.assert_not_called()
+
+
+def test_execute_blocks_longs_when_geo_severity_high(tmp_path):
+    """Geo-context with severity=high should block all long proposals."""
+    from trader.pipeline.models import (
+        ProposalSet, SectorProposals, Proposal, ProposalOrder, ProposalSizing,
+        GeoContext,
+    )
+
+    runner = CliRunner()
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+
+    proposal_set = ProposalSet(
+        run_id="test-geo",
+        regime="bull",
+        available_capital=100_000.0,
+        geo_context=GeoContext(severity="high", events=["war escalation"]),
+        sectors={
+            "Technology": SectorProposals(
+                summary="test",
+                proposals=[
+                    Proposal(
+                        rank=1,
+                        ticker="AAPL",
+                        source="discovery",
+                        direction="long",
+                        consensus=4,
+                        strategies_agree=["RSI", "MACD", "MACross", "BNF"],
+                        conviction="high",
+                        order=ProposalOrder(
+                            side="buy",
+                            order_type="limit",
+                            contract_type="stock",
+                            qty=10,
+                            price=150.0,
+                            stop_loss=145.0,
+                            take_profit=160.0,
+                        ),
+                        sizing=ProposalSizing(
+                            atr=3.5,
+                            risk_per_share=5.0,
+                            position_value=1500.0,
+                            pct_of_nlv=0.015,
+                        ),
+                        sector="Technology",
+                    ),
+                ],
+            ),
+        },
+    )
+    (pipeline_dir / "proposals.json").write_text(proposal_set.model_dump_json())
+
+    with patch("trader.cli.pipeline._get_pipeline_dir", return_value=pipeline_dir), \
+         patch("trader.cli.pipeline.get_adapter") as mock_adapter_factory:
+
+        mock_adapter = AsyncMock()
+        mock_adapter_factory.return_value = mock_adapter
+
+        result = runner.invoke(cli, ["pipeline", "execute"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+
+    # All longs blocked — no proposals to execute
+    assert data["status"] == "no_proposals"
+    mock_adapter.place_order.assert_not_called()
+
+
+def test_pipeline_run_dry_skips_execute(tmp_path):
+    """pipeline run --dry invokes discover and analyze but NOT execute."""
+    import click
+    runner = CliRunner()
+
+    # We mock discover and analyze at the callback level so we can track calls
+    # without needing real broker/news connections.
+    discover_called = []
+    analyze_called = []
+    execute_called = []
+
+    from trader.cli.pipeline import discover, analyze, execute
+
+    # Mark fakes with @click.pass_context so ctx.invoke passes the context
+    @click.pass_context
+    def fake_discover(ctx, regime):
+        discover_called.append({"regime": regime})
+        # Write a minimal candidates.json so run() can read the regime
+        pipeline_dir = tmp_path / "pipeline"
+        pipeline_dir.mkdir(exist_ok=True)
+        (pipeline_dir / "candidates.json").write_text(json.dumps({
+            "regime": regime or "bull",
+            "total_candidates": 0,
+        }))
+
+    @click.pass_context
+    def fake_analyze(ctx, regime, consensus, watchlist_consensus):
+        analyze_called.append({
+            "regime": regime,
+            "consensus": consensus,
+            "watchlist_consensus": watchlist_consensus,
+        })
+
+    @click.pass_context
+    def fake_execute(ctx, max_orders, dry_run):
+        execute_called.append({"max_orders": max_orders, "dry_run": dry_run})
+
+    with patch("trader.cli.pipeline._get_pipeline_dir", return_value=tmp_path / "pipeline"), \
+         patch.object(discover, "callback", fake_discover), \
+         patch.object(analyze, "callback", fake_analyze), \
+         patch.object(execute, "callback", fake_execute):
+
+        result = runner.invoke(cli, ["pipeline", "run", "--dry", "--regime", "bull"])
+
+    assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+
+    # discover and analyze should have been called
+    assert len(discover_called) == 1, f"discover not called: {discover_called}"
+    assert discover_called[0]["regime"] == "bull"
+
+    assert len(analyze_called) == 1, f"analyze not called: {analyze_called}"
+    assert analyze_called[0]["regime"] == "bull"
+
+    # execute should NOT have been called (--dry flag)
+    assert len(execute_called) == 0, f"execute was called unexpectedly: {execute_called}"

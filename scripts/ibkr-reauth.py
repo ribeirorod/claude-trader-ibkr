@@ -46,6 +46,10 @@ GATEWAY_URL = os.getenv("IBEAM_GATEWAY_BASE_URL", "https://localhost:5001")
 MFA_PENDING_FILE = ROOT / ".trader" / "mfa-pending"
 MFA_CODE_FILE = ROOT / ".trader" / "mfa-code"
 MFA_WAIT_SECONDS = 120  # how long to wait for user to reply with MFA code
+COOKIES_FILE = ROOT / ".trader" / "ibkr-cookies.json"
+LOCK_FILE = ROOT / ".trader" / "reauth.lock"
+COOKIES_FILE = ROOT / ".trader" / "ibkr-cookies.json"
+LOCK_FILE = ROOT / ".trader" / "reauth.lock"
 
 # Credentials — always use live creds for live, paper creds for paper
 if IBKR_MODE == "paper":
@@ -101,6 +105,34 @@ def wait_for_mfa_code() -> str | None:
         return None
     finally:
         _clear_mfa_pending()
+
+
+def _save_cookies(ctx) -> None:
+    """Extract cookies from the Playwright browser context and save to disk."""
+    import json
+    cookies = ctx.cookies()
+    COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COOKIES_FILE.write_text(json.dumps(cookies, indent=2))
+    log.info("playwright_cookies_saved", count=len(cookies), path=str(COOKIES_FILE))
+
+
+def _acquire_lock() -> bool:
+    """Prevent concurrent reauth processes. Returns True if lock acquired."""
+    try:
+        LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if LOCK_FILE.exists():
+            lock_age = time.time() - float(LOCK_FILE.read_text().strip())
+            if lock_age < 180:  # lock valid for 3 min
+                return False
+            log.warning("ibkr_reauth_stale_lock", age_s=int(lock_age))
+        LOCK_FILE.write_text(str(time.time()))
+        return True
+    except Exception:
+        return True  # fail open
+
+
+def _release_lock() -> None:
+    LOCK_FILE.unlink(missing_ok=True)
 
 
 # ── Playwright login ──────────────────────────────────────────────────────────
@@ -162,6 +194,7 @@ def run_login() -> bool:
                 final_url = page.url
                 page.screenshot(path=str(ROOT / ".trader" / "reauth-debug.png"))
                 if "/sso/Login" not in final_url:
+                    _save_cookies(ctx)
                     log.info("playwright_login_success", mode="paper")
                     return True
                 log.error("playwright_login_failed", url=final_url, mode="paper")
@@ -284,6 +317,7 @@ def run_login() -> bool:
                     log.warning("playwright_auth_status_poll_error", attempt=attempt, error=str(exc))
                 page.wait_for_timeout(3_000)
 
+            _save_cookies(ctx)
             page.screenshot(path=str(ROOT / ".trader" / "reauth-debug.png"))
             log.info("playwright_login_success", mode="live", mfa=True)
             return True
@@ -307,7 +341,17 @@ def main() -> None:
         )
         sys.exit(1)
 
-    success = run_login()
+    if not _acquire_lock():
+        log.warning("ibkr_reauth_already_running")
+        sys.exit(0)
+
+    # Clear any stale MFA code from a previous run
+    MFA_CODE_FILE.unlink(missing_ok=True)
+
+    try:
+        success = run_login()
+    finally:
+        _release_lock()
 
     if success:
         log.info("ibkr_reauth_complete", mode=IBKR_MODE)

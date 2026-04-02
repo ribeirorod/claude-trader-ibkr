@@ -1,7 +1,8 @@
 from __future__ import annotations
+import time
 import pandas as pd
 import numpy as np
-from trader.market.regime import MarketRegime, detect_regime
+from trader.market.regime import MarketRegime, detect_regime, _cache
 
 
 def _make_ohlcv(n: int = 100, trend: str = "up") -> pd.DataFrame:
@@ -47,3 +48,62 @@ def test_regime_enum_values():
     assert MarketRegime.BULL.value == "bull"
     assert MarketRegime.CAUTION.value == "caution"
     assert MarketRegime.BEAR.value == "bear"
+
+
+def test_regime_caches_result(tmp_path):
+    """Second call with same params should use cache, not call fetch_fn again."""
+    _cache.clear()
+    call_count = 0
+
+    def counting_fetch(ticker, period, progress):
+        nonlocal call_count
+        call_count += 1
+        return _make_ohlcv(trend="up")
+
+    r1 = detect_regime(
+        tickers=["SPY", "QQQ"],
+        fetch_fn=counting_fetch,
+        cache_dir=tmp_path,
+        cache_ttl_seconds=300,
+    )
+    first_count = call_count
+
+    r2 = detect_regime(
+        tickers=["SPY", "QQQ"],
+        fetch_fn=counting_fetch,
+        cache_dir=tmp_path,
+        cache_ttl_seconds=300,
+    )
+    assert r1 == r2 == MarketRegime.BULL
+    # Second call should NOT have incremented the counter
+    assert call_count == first_count
+
+
+def test_regime_cache_expires(tmp_path):
+    """With TTL=0 and a small sleep, cache should expire and refetch."""
+    _cache.clear()
+    call_count = 0
+
+    def counting_fetch(ticker, period, progress):
+        nonlocal call_count
+        call_count += 1
+        return _make_ohlcv(trend="up")
+
+    detect_regime(
+        tickers=["SPY", "QQQ"],
+        fetch_fn=counting_fetch,
+        cache_dir=tmp_path,
+        cache_ttl_seconds=0,
+    )
+    first_count = call_count
+
+    time.sleep(0.01)
+
+    detect_regime(
+        tickers=["SPY", "QQQ"],
+        fetch_fn=counting_fetch,
+        cache_dir=tmp_path,
+        cache_ttl_seconds=0,
+    )
+    # Should have fetched again since cache expired
+    assert call_count > first_count

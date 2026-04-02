@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -9,6 +10,7 @@ import click
 
 from trader.adapters.factory import get_adapter
 from trader.cli.__main__ import output_json
+from trader.guard import OrderGuard
 from trader.market.regime import detect_regime
 from trader.models import OrderRequest
 from trader.news.factory import get_news_provider
@@ -22,7 +24,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _get_watchlist_path() -> Path:
-    return _ROOT / "outputs" / "watchlists.json"
+    return _ROOT / ".trader" / "watchlists.json"
 
 
 def _get_pipeline_dir() -> Path:
@@ -57,15 +59,16 @@ def discover(ctx, regime: str | None):
         from trader.config import Config
         config = Config()
 
+    pipeline_dir = _get_pipeline_dir()
+
     # Auto-detect regime if not provided
     if regime is None:
-        regime = detect_regime().value
+        regime = detect_regime(cache_dir=pipeline_dir).value
 
     adapter = get_adapter(broker, config)
     news_provider = get_news_provider(config)
 
     watchlist_path = _get_watchlist_path()
-    pipeline_dir = _get_pipeline_dir()
 
     async def _run():
         await adapter.connect()
@@ -134,7 +137,7 @@ def analyze(ctx, regime: str | None, consensus: int, watchlist_consensus: int):
 
     # Auto-detect regime if not provided
     if regime is None:
-        regime = detect_regime().value
+        regime = detect_regime(cache_dir=pipeline_dir).value
 
     adapter = get_adapter(broker, config)
 
@@ -165,6 +168,33 @@ def analyze(ctx, regime: str | None, consensus: int, watchlist_consensus: int):
     output_json(result)
 
 
+_AGENT_LOG = Path(__file__).resolve().parent.parent.parent / ".trader" / "logs" / "agent.jsonl"
+
+
+def _log_order_intent(proposal, order_req: OrderRequest, regime: str) -> None:
+    """Append an ORDER_INTENT entry to agent.jsonl so conductor tracks it."""
+    entry = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "run_id": f"pipeline-execute-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "agent": "pipeline",
+        "event": "ORDER_INTENT",
+        "ticker": proposal.ticker,
+        "action": order_req.side,
+        "shares": order_req.qty,
+        "type": order_req.order_type,
+        "price": order_req.price,
+        "stop": order_req.stop_loss,
+        "sector": proposal.sector,
+        "reason": f"Pipeline execute. {regime.upper()} regime, {proposal.consensus}/6 consensus, {proposal.conviction} conviction.",
+    }
+    try:
+        _AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_AGENT_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as exc:
+        logger.warning("Failed to log ORDER_INTENT: %s", exc)
+
+
 @pipeline.command()
 @click.option(
     "--max-orders",
@@ -187,6 +217,9 @@ def execute(ctx, max_orders: int, dry_run: bool):
     Reads proposals.json, converts each proposal into an order request,
     and places orders via the broker adapter. Supports bracket orders
     (with stop-loss + take-profit), limit orders, and options.
+
+    Every order is validated by OrderGuard before placement. Orders that
+    fail guard checks are skipped with status="guarded".
 
     Examples:
       trader pipeline execute
@@ -215,6 +248,17 @@ def execute(ctx, max_orders: int, dry_run: bool):
     ]
     all_proposals.sort(key=lambda p: p.rank)
 
+    # Geo-context gate: drop long proposals when geopolitical severity is high
+    geo = proposal_set.geo_context
+    if geo and geo.block_new_longs:
+        blocked = [p for p in all_proposals if p.direction == "long"]
+        all_proposals = [p for p in all_proposals if p.direction != "long"]
+        if blocked:
+            logger.warning(
+                "Geo-context blocking %d long proposal(s): %s",
+                len(blocked), [b.ticker for b in blocked],
+            )
+
     to_execute = all_proposals[:max_orders]
 
     if not to_execute:
@@ -222,10 +266,16 @@ def execute(ctx, max_orders: int, dry_run: bool):
         return
 
     adapter = get_adapter(broker, config)
+    guard = OrderGuard()
 
     async def _run():
         await adapter.connect()
         try:
+            # Fetch account state for guard validation
+            account = await adapter.get_account()
+            positions = await adapter.list_positions()
+            open_orders = await adapter.list_orders()
+
             results = []
             for p in to_execute:
                 strike = p.order.strike
@@ -266,6 +316,27 @@ def execute(ctx, max_orders: int, dry_run: bool):
                     right=right,
                 )
 
+                # OrderGuard validation before placement
+                guard_result = guard.validate(
+                    order=order_req,
+                    account=account,
+                    positions=positions,
+                    open_orders=open_orders,
+                )
+                if not guard_result.allowed:
+                    logger.warning(
+                        "%s: order blocked by guard — %s",
+                        p.ticker, guard_result.reason,
+                    )
+                    results.append({
+                        "ticker": p.ticker,
+                        "direction": p.direction,
+                        "status": "guarded",
+                        "reason": guard_result.reason,
+                        "details": guard_result.details,
+                    })
+                    continue
+
                 if dry_run:
                     results.append({
                         "ticker": p.ticker,
@@ -283,6 +354,7 @@ def execute(ctx, max_orders: int, dry_run: bool):
                             "status": "placed",
                             "order_response": resp if isinstance(resp, dict) else resp.model_dump() if hasattr(resp, "model_dump") else str(resp),
                         })
+                        _log_order_intent(p, order_req, proposal_set.regime)
                     except Exception as exc:
                         results.append({
                             "ticker": p.ticker,
@@ -293,6 +365,7 @@ def execute(ctx, max_orders: int, dry_run: bool):
 
             return {
                 "executed": len([r for r in results if r["status"] == "placed"]),
+                "guarded": len([r for r in results if r["status"] == "guarded"]),
                 "errors": len([r for r in results if r["status"] == "error"]),
                 "dry_run": dry_run,
                 "results": results,
@@ -302,3 +375,49 @@ def execute(ctx, max_orders: int, dry_run: bool):
 
     result = asyncio.run(_run())
     output_json(result)
+
+
+@pipeline.command()
+@click.option("--regime", type=click.Choice(["bull", "caution", "bear"]), default=None,
+              help="Market regime override. Auto-detected if omitted.")
+@click.option("--consensus", type=int, default=3, show_default=True,
+              help="Minimum strategy consensus for discovery candidates.")
+@click.option("--watchlist-consensus", type=int, default=2, show_default=True,
+              help="Minimum strategy consensus for watchlist candidates.")
+@click.option("--max-orders", type=int, default=5, show_default=True,
+              help="Maximum number of proposals to execute.")
+@click.option("--dry", "dry_run", is_flag=True, default=False,
+              help="Run discover + analyze only, skip execution.")
+@click.pass_context
+def run(ctx, regime, consensus, watchlist_consensus, max_orders, dry_run):
+    """Run the full pipeline: discover -> analyze -> execute.
+
+    \b
+    With --dry, stops after analyze (review proposals before acting).
+
+    Examples:
+      trader pipeline run                    # full auto
+      trader pipeline run --dry              # discover + analyze only
+      trader pipeline run --regime bear      # force bear regime
+    """
+    # Step 1: Invoke discover
+    ctx.invoke(discover, regime=regime)
+
+    # Read the regime that discover resolved (from candidates.json)
+    pipeline_dir = _get_pipeline_dir()
+    candidates_path = pipeline_dir / "candidates.json"
+    if candidates_path.exists():
+        cs_data = json.loads(candidates_path.read_text())
+        resolved_regime = cs_data.get("regime", regime)
+    else:
+        resolved_regime = regime
+
+    # Step 2: Invoke analyze with resolved regime
+    ctx.invoke(analyze, regime=resolved_regime, consensus=consensus,
+               watchlist_consensus=watchlist_consensus)
+
+    if dry_run:
+        return
+
+    # Step 3: Invoke execute
+    ctx.invoke(execute, max_orders=max_orders, dry_run=False)

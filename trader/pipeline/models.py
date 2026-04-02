@@ -23,8 +23,13 @@ class GeoContext(BaseModel):
     severity: str = "none"  # "high" | "medium" | "low" | "none"
     events: list[str] = []
     affected_sectors: list[str] = []
-    block_new_longs: bool = False
+    raise_consensus_threshold: bool = False
     hedge_suggested: bool = False
+
+    @property
+    def block_new_longs(self) -> bool:
+        """Block new long entries when geopolitical severity is high."""
+        return self.severity == "high"
 
 
 class CandidateSet(BaseModel):
@@ -32,6 +37,7 @@ class CandidateSet(BaseModel):
     regime: str
     sectors: dict[str, list[Candidate]]
     geo_context: GeoContext = GeoContext()
+    ticker_sentiment: dict[str, float] = {}  # ticker -> aggregate score from SentimentScorer
 
     @computed_field
     @property
@@ -92,11 +98,20 @@ class SectorProposals(BaseModel):
     proposals: list[Proposal] = []
 
 
+class VixContext(BaseModel):
+    current: float = 0.0
+    peak: float = 0.0
+    days_since_peak: int = 0
+    blocked: bool = False
+    reason: str | None = None
+
+
 class ProposalSet(BaseModel):
     run_id: str
     regime: str
     available_capital: float = 0.0
     geo_context: GeoContext = GeoContext()
+    vix_context: VixContext = VixContext()
     sectors: dict[str, SectorProposals] = {}
 
     @computed_field

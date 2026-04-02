@@ -28,6 +28,9 @@ def mock_config():
     cfg.benzinga_api_key = "bz-key"
     cfg.marketaux_api_key = "mx-key"
     cfg.massive_api_key = ""
+    cfg.finnhub_api_key = "fh-key"
+    cfg.alphavantage_api_key = "av-key"
+    cfg.eodhd_api_key = "eod-key"
     return cfg
 
 
@@ -156,8 +159,8 @@ def test_factory_returns_chain_with_available_providers(mock_config):
 
     provider = get_news_provider(mock_config)
     assert isinstance(provider, NewsProviderChain)
-    # marketaux_api_key and benzinga_api_key both set → 2 providers
-    assert len(provider.providers) == 2
+    # marketaux + benzinga + finnhub + alphavantage + eodhd = 5
+    assert len(provider.providers) == 5
 
 
 def test_factory_skips_providers_with_no_key(mock_config):
@@ -168,6 +171,9 @@ def test_factory_skips_providers_with_no_key(mock_config):
     mock_config.marketaux_api_key = ""
     mock_config.benzinga_api_key = "bz-key"
     mock_config.massive_api_key = ""
+    mock_config.finnhub_api_key = ""
+    mock_config.alphavantage_api_key = ""
+    mock_config.eodhd_api_key = ""
     provider = get_news_provider(mock_config)
     assert isinstance(provider, NewsProviderChain)
     assert len(provider.providers) == 1

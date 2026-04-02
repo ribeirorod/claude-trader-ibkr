@@ -7,12 +7,8 @@ from trader.news.base import NewsProvider
 def get_news_provider(config) -> NewsProviderChain:
     """
     Build the news provider chain from config.
-    Order: Marketaux → Benzinga
+    Order: Marketaux → Benzinga → Finnhub → Alpha Vantage → EODHD
     Providers with empty API keys are skipped.
-
-    Note: MASSIVE_API_KEY is reserved for EOD stock/options data (separate
-    module from their news API). Massive news requires an additional paid
-    plan per asset class (~$30/month each) — not included here.
     """
     providers: list[NewsProvider] = []
 
@@ -23,5 +19,17 @@ def get_news_provider(config) -> NewsProviderChain:
     if getattr(config, "benzinga_api_key", ""):
         from trader.news.benzinga import BenzingaClient
         providers.append(BenzingaClient(config))
+
+    if getattr(config, "finnhub_api_key", ""):
+        from trader.news.finnhub import FinnhubProvider
+        providers.append(FinnhubProvider(config.finnhub_api_key))
+
+    if getattr(config, "alphavantage_api_key", ""):
+        from trader.news.alphavantage import AlphaVantageProvider
+        providers.append(AlphaVantageProvider(config.alphavantage_api_key))
+
+    if getattr(config, "eodhd_api_key", ""):
+        from trader.news.eodhd import EODHDProvider
+        providers.append(EODHDProvider(config.eodhd_api_key))
 
     return NewsProviderChain(providers)

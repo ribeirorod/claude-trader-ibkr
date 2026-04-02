@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
@@ -10,8 +11,9 @@ import yfinance as yf
 
 from trader.pipeline.models import (
     CandidateSet, Candidate, Proposal, ProposalOrder, ProposalSizing,
-    ProposalSet, SectorProposals,
+    ProposalSet, SectorProposals, VixContext,
 )
+from trader.market.vix import vix_gate
 from trader.strategies.factory import get_strategy, list_strategies
 from trader.strategies.risk_filter import RiskFilter
 from trader.strategies.stop_loss import (
@@ -21,7 +23,9 @@ from trader.strategies.stop_loss import (
     regime_atr_multiplier,
 )
 from trader.config import Config
-from trader.models import Position, Order
+from trader.models import Position, Order, SentimentResult
+
+logger = logging.getLogger(__name__)
 
 # Hard cap: no single proposal should exceed this % of NLV
 _MAX_POSITION_PCT = 10.0
@@ -36,6 +40,8 @@ _YF_TICKER_MAP: dict[str, str] = {
     "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
     # Inverse / short ETFs (UCITS)
     "XSPD": "DXS3.DE", "XISP": "XISP.L", "DSPX": "DSPX.L",
+    # European defense (no exchange suffix in watchlist)
+    "RHM": "RHM.DE",
 }
 
 
@@ -81,13 +87,13 @@ def _next_monthly_expiry(min_dte: int = 30) -> str:
 
 
 def _run_all_strategies(
-    df: pd.DataFrame, sector: str
+    df: pd.DataFrame, sector: str, regime: str | None = None
 ) -> dict[str, int]:
     """Run all strategies on OHLCV data, return {strategy_name: signal}."""
     results = {}
     for name in list_strategies():
         try:
-            strat = get_strategy(name, sector=sector or None)
+            strat = get_strategy(name, sector=sector or None, regime=regime)
             sig_series = strat.signals(df)
             results[name] = int(sig_series.iloc[-1])
         except Exception:
@@ -126,6 +132,19 @@ def run_analyze(
     """
     candidates_path = pipeline_dir / "candidates.json"
     cs = CandidateSet.model_validate_json(candidates_path.read_text())
+    ticker_sentiment = cs.ticker_sentiment  # {ticker: float}
+
+    # VIX-based entry gate — check once for the entire run
+    vix_result = vix_gate()
+    vix_ctx = VixContext(
+        current=vix_result["vix_current"],
+        peak=vix_result["vix_peak"],
+        days_since_peak=vix_result["days_since_peak"],
+        blocked=vix_result["blocked"],
+        reason=vix_result["reason"],
+    )
+    if vix_ctx.blocked:
+        logger.warning("VIX gate active: %s", vix_ctx.reason)
 
     rf = RiskFilter()
     atr_mult = regime_atr_multiplier(regime)
@@ -164,7 +183,7 @@ def run_analyze(
                 resolved_sector = _get_sector(candidate.ticker) or "Unknown"
 
             # Multi-strategy consensus
-            signals = _run_all_strategies(df, resolved_sector)
+            signals = _run_all_strategies(df, resolved_sector, regime=regime)
             buy_count = sum(1 for s in signals.values() if s == 1)
             sell_count = sum(1 for s in signals.values() if s == -1)
 
@@ -180,6 +199,14 @@ def run_analyze(
                 agree = [k for k, v in signals.items() if v == -1]
                 disagree = [k for k, v in signals.items() if v != -1]
 
+            # VIX gate: block new longs when VIX is elevated; hedges/shorts always allowed
+            if vix_result["blocked"] and direction_signal == 1:
+                logger.info(
+                    "VIX gate skipping long candidate %s: %s",
+                    candidate.ticker, vix_result["reason"],
+                )
+                continue
+
             # Threshold check
             threshold = (
                 watchlist_consensus_threshold
@@ -189,14 +216,35 @@ def run_analyze(
             if consensus < threshold:
                 continue
 
-            # Risk filter (with regime!)
+            # Build SentimentResult from discover's scored sentiment
+            sentiment = None
+            agg_score = ticker_sentiment.get(candidate.ticker)
+            if agg_score is not None:
+                if agg_score > 0.1:
+                    sig = "bullish"
+                elif agg_score < -0.1:
+                    sig = "bearish"
+                else:
+                    sig = "neutral"
+                sentiment = SentimentResult(
+                    ticker=candidate.ticker,
+                    score=agg_score,
+                    signal=sig,
+                    article_count=len(candidate.news),
+                    lookback_hours=24,
+                    top_headlines=[n.headline for n in candidate.news[:3]],
+                )
+
+            # Risk filter (with regime and sentiment!)
             filtered = rf.filter(
                 signal=direction_signal,
                 quote=None,
                 position=None,
-                sentiment=None,
+                sentiment=sentiment,
                 regime=regime,
                 paper_mode=paper_mode,
+                account_value=account_value,
+                ticker=candidate.ticker,
             )
             if filtered["filtered"]:
                 continue
@@ -343,6 +391,7 @@ def run_analyze(
         regime=regime,
         available_capital=account_value,
         geo_context=cs.geo_context,
+        vix_context=vix_ctx,
         sectors=sector_proposals,
     )
 

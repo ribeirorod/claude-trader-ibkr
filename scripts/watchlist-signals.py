@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Watchlist signal scan — runs RSI+news signals on all watchlists, sends Telegram push.
+Watchlist signal scan via pipeline discover — runs discovery with sentiment
+scoring and sends Telegram push with candidates grouped by sector.
 
 Usage:
   uv run python scripts/watchlist-signals.py
 
-Reads:  outputs/watchlists.json
-Sends:  one Telegram message with signals grouped by watchlist and signal type.
+Reads:  .trader/watchlists.json (via pipeline discover)
+Writes: .trader/pipeline/candidates.json (via pipeline discover)
+Sends:  one Telegram message with discovered candidates and sentiment.
 Runs:   weekdays 8:05am and 12:00pm CET via crons.json.
 """
 from __future__ import annotations
@@ -37,141 +39,89 @@ from trader.notify import send_telegram
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("watchlist-signals")
 
-WATCHLISTS_PATH = ROOT / "outputs" / "watchlists.json"
 
-
-def _load_watchlists() -> dict[str, list[str]]:
-    """Load all watchlists. Returns {} if file is missing.
-
-    Handles both flat format {"name": ["T1", "T2"]} and nested format
-    {"name": {"tickers": ["T1", "T2"], "sectors": {...}}}.
-    """
-    if not WATCHLISTS_PATH.exists():
-        return {}
-    raw = json.loads(WATCHLISTS_PATH.read_text())
-    out: dict[str, list[str]] = {}
-    for name, val in raw.items():
-        if isinstance(val, list):
-            out[name] = val
-        elif isinstance(val, dict):
-            out[name] = val.get("tickers", [])
-        else:
-            log.warning("skipping watchlist %s — unexpected type %s", name, type(val))
-    return out
-
-
-def _run_signals(tickers: list[str]) -> list[dict]:
-    """
-    Run `trader strategies signals --with-news` via subprocess.
-
-    Returns the parsed JSON array as-is — including per-ticker error dicts
-    like {"ticker": "X", "error": "..."}. Returns [] only on subprocess
-    failure (non-zero exit) or JSON parse error.
-    """
-    result = subprocess.run(
-        [
-            "uv", "run", "trader", "strategies", "signals",
-            "--tickers", ",".join(tickers),
-            "--with-news",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(ROOT),
-        timeout=120,
-    )
-    if result.returncode != 0:
-        log.error("signals_failed stderr=%s", result.stderr[:300])
-        return []
+def _run_pipeline_discover() -> dict | None:
+    """Run pipeline discover and return the CandidateSet as a dict."""
     try:
+        result = subprocess.run(
+            ["uv", "run", "trader", "pipeline", "discover"],
+            capture_output=True, text=True, timeout=180, cwd=str(ROOT),
+        )
+        if result.returncode != 0:
+            log.error("pipeline discover failed: %s", result.stderr[:300])
+            return None
         return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        log.error("signals_bad_json output=%s", result.stdout[:200])
-        return []
-
-
-def _fmt_signal_row(r: dict) -> str:
-    """Format one successful ticker result as a fixed-width Telegram row."""
-    label = r.get("signal_label", "hold").upper()
-    ticker = r.get("ticker", "?")
-    strategy = r.get("strategy", "rsi").upper()
-    arrow = {"BUY": "↑", "SELL": "↓", "HOLD": "→"}.get(label, "→")
-    sent = r.get("sentiment_score")  # field name matches CLI JSON output exactly
-    sent_str = f"  sentiment {sent:+.2f}" if sent is not None else ""
-    filtered = r.get("filtered", False)
-    filter_reason_safe = (r.get("filter_reason") or "").replace("_", "\\_")
-    filter_str = f"  [{filter_reason_safe}]" if filtered else ""
-    return f"{label:<4} {ticker:<7} {strategy} {arrow}{sent_str}{filter_str}"
-
-
-def _build_message(watchlists: dict[str, list[str]]) -> str | None:
-    """
-    Build the full Telegram message. Returns None if all lists are empty or
-    produce no results.
-
-    Grouping key: signal_label string ("buy"/"sell"/"hold").
-    Error dicts (containing "error" key) are separated before grouping to
-    avoid KeyError on missing signal_label.
-    """
-    now = datetime.now().strftime("%a %d %b  %H:%M CET")
-    sections: list[str] = [f"*SIGNALS — {now}*"]
-    any_content = False
-
-    for list_name, tickers in sorted(watchlists.items()):
-        if not tickers:
-            continue
-        results = _run_signals(tickers)
-        if not results:
-            log.warning(
-                "signals_empty list=%s tickers=%s — subprocess returned no results",
-                list_name,
-                tickers,
-            )
-            continue
-        any_content = True
-
-        # Separate error dicts first to avoid KeyError on signal_label
-        errors = [r for r in results if "error" in r]
-        valid  = [r for r in results if "error" not in r]
-
-        buys  = [r for r in valid if r.get("signal_label") == "buy"]
-        sells = [r for r in valid if r.get("signal_label") == "sell"]
-        holds = [r for r in valid if r.get("signal_label") == "hold"]
-
-        rows: list[str] = []
-        for group in (buys, sells, holds):
-            for r in group:
-                rows.append(_fmt_signal_row(r))
-        for r in errors:
-            rows.append(f"ERR  {r.get('ticker', '?'):<7}  {str(r.get('error', ''))[:40]}")
-
-        sections += [
-            "",
-            f"*{list_name}*",
-            "```",
-            "\n".join(rows) if rows else "(no results)",
-            "```",
-        ]
-
-    if not any_content:
+    except subprocess.TimeoutExpired:
+        log.error("pipeline discover timed out")
         return None
-    return "\n".join(sections)
+    except json.JSONDecodeError:
+        log.error("pipeline discover returned invalid JSON")
+        return None
+    except Exception as e:
+        log.error("pipeline discover error: %s", e)
+        return None
+
+
+def _build_message(candidate_set: dict) -> str | None:
+    """Format candidates into a Telegram message."""
+    regime = candidate_set.get("regime", "unknown")
+    sectors = candidate_set.get("sectors", {})
+    ticker_sentiment = candidate_set.get("ticker_sentiment", {})
+    total = candidate_set.get("total_candidates", 0)
+    watchlist_count = candidate_set.get("watchlist_count", 0)
+    discovery_count = candidate_set.get("discovery_count", 0)
+
+    if total == 0:
+        return None
+
+    now = datetime.now().strftime("%a %d %b  %H:%M CET")
+    lines = [
+        f"*PIPELINE DISCOVER — {now}*",
+        f"Regime: {regime.upper()}  |  {total} candidates ({watchlist_count} watchlist, {discovery_count} scan)",
+    ]
+
+    for sector_name, candidates in sorted(sectors.items()):
+        if not candidates:
+            continue
+        lines.append(f"\n*{sector_name}*")
+        rows = []
+        for c in candidates:
+            source_tag = "WL" if c.get("source") == "watchlist" else "SC"
+            ticker = c.get("ticker", "?")
+            sentiment = ticker_sentiment.get(ticker, 0.0)
+            if sentiment > 0.1:
+                sent_icon = "+"
+            elif sentiment < -0.1:
+                sent_icon = "-"
+            else:
+                sent_icon = " "
+            news_count = len(c.get("news", []))
+            news_str = f"  {news_count}n" if news_count > 0 else ""
+            rows.append(f"{source_tag} {ticker:<7} {sent_icon}{sentiment:+.2f}{news_str}")
+        lines.append("```")
+        lines.append("\n".join(rows))
+        lines.append("```")
+
+    return "\n".join(lines)
 
 
 def main() -> None:
     cfg = Config()
-    watchlists = _load_watchlists()
-    if not watchlists:
-        log.info("No watchlists found — nothing to send.")
-        return
 
-    msg = _build_message(watchlists)
+    cs = _run_pipeline_discover()
+    if cs is None:
+        log.error("Pipeline discover failed — nothing to send.")
+        sys.exit(1)
+
+    msg = _build_message(cs)
     if msg is None:
-        log.info("All watchlists empty — nothing to send.")
+        log.info("No candidates found — nothing to send.")
         return
 
     ok = send_telegram(msg, config=cfg, parse_mode="Markdown")
     if ok:
-        log.info("Signals report sent (%d lists).", len(watchlists))
+        total = cs.get("total_candidates", 0)
+        log.info("Pipeline discover report sent (%d candidates).", total)
     else:
         log.error("Failed to send Telegram message.")
         sys.exit(1)

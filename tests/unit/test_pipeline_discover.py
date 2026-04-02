@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from trader.pipeline.discover import run_discover
 from trader.pipeline.models import CandidateSet
-from trader.models import ScanResult
+from trader.models import ScanResult, NewsItem
 
 
 def _scan_result(symbol, sector="Technology"):
@@ -125,3 +125,69 @@ def test_discover_writes_candidates_json(tmp_path):
     assert (pipeline_dir / "candidates.json").exists()
     data = json.loads((pipeline_dir / "candidates.json").read_text())
     assert data["regime"] == "bull"
+
+
+def test_discover_scores_news_sentiment(tmp_path):
+    """News items with bullish words produce real sentiment scores (not 0.0)
+    and ticker_sentiment dict has positive score for tickers with bullish news."""
+    wl_path = tmp_path / "watchlists.json"
+    wl_path.write_text(json.dumps({
+        "default": {"tickers": ["AAPL", "TSLA"], "sectors": {"AAPL": "Technology", "TSLA": "Automotive"}},
+    }))
+    pipeline_dir = tmp_path / "pipeline"
+
+    bullish_news = [
+        NewsItem(
+            id="1",
+            ticker="AAPL",
+            headline="AAPL beats earnings, strong growth and record profit surge",
+            summary="Apple exceeds expectations with record revenue and strong gains",
+            published_at="2026-03-31T10:00:00Z",
+        ),
+        NewsItem(
+            id="2",
+            ticker="AAPL",
+            headline="Analysts upgrade AAPL, bullish rally expected",
+            summary="Multiple analysts raised price targets after positive results",
+            published_at="2026-03-31T11:00:00Z",
+        ),
+        NewsItem(
+            id="3",
+            ticker="TSLA",
+            headline="TSLA decline continues amid weak demand and losses",
+            summary="Tesla misses estimates, bearish outlook with lower guidance",
+            published_at="2026-03-31T10:00:00Z",
+        ),
+    ]
+
+    async def mock_news_fn(tickers, limit):
+        return [item for item in bullish_news if item.ticker in tickers]
+
+    result = _run(run_discover(
+        regime="bull",
+        watchlist_path=wl_path,
+        pipeline_dir=pipeline_dir,
+        scan_fn=AsyncMock(return_value=[]),
+        news_fn=mock_news_fn,
+    ))
+
+    # Check that CandidateNews has real sentiment (not hardcoded 0.0)
+    aapl_candidates = [
+        c for candidates in result.sectors.values()
+        for c in candidates if c.ticker == "AAPL"
+    ]
+    assert len(aapl_candidates) == 1
+    aapl = aapl_candidates[0]
+    assert len(aapl.news) > 0
+    # At least one headline should have non-zero sentiment
+    assert any(n.sentiment != 0.0 for n in aapl.news)
+    # Bullish news should produce positive per-headline sentiment
+    assert any(n.sentiment > 0.0 for n in aapl.news)
+
+    # Check ticker_sentiment dict has positive score for AAPL (bullish news)
+    assert "AAPL" in result.ticker_sentiment
+    assert result.ticker_sentiment["AAPL"] > 0.0
+
+    # Check TSLA has negative sentiment (bearish news)
+    assert "TSLA" in result.ticker_sentiment
+    assert result.ticker_sentiment["TSLA"] < 0.0

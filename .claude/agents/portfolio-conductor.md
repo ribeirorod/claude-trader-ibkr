@@ -131,14 +131,14 @@ Build `geo_context` object:
   "events": ["brief description"],
   "affected_sectors": ["energy", "semiconductors", "defense"],
   "affected_tickers": ["ASML", "NVDA"],
-  "block_new_longs": false,
+  "raise_consensus_threshold": false,
   "hedge_suggested": false
 }
 ```
 
 Rules:
-- `severity = High` → set `block_new_longs: true` (no new entries until hedge confirmed); set `hedge_suggested: true`; auto-dispatch hedge using the bearish decision tree (prefer inverse ETF from `.trader/inverse_etfs.json`, then index puts)
-- `severity = Medium` → pass affected sectors to opportunity-finder as exclusions; consider sector-specific puts if affected_tickers overlap with held positions
+- `severity = High` → set `raise_consensus_threshold: true` (require consensus >= 5/6 AND strong positive sentiment for any new longs); set `hedge_suggested: true`; auto-dispatch hedge using the bearish decision tree (prefer inverse ETF from `.trader/inverse_etfs.json`, then index puts)
+- `severity = Medium` → pass affected sectors to pipeline (discover → analyze) as exclusions; consider sector-specific puts if affected_tickers overlap with held positions
 - `severity = Low/None` → pass geo_context with empty lists; no action
 
 **Auto-hedging (when `hedge_suggested: true`):**
@@ -150,7 +150,7 @@ Rules:
 
 Log the scan result:
 ```bash
-echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conductor","event":"GEO_SCAN","severity":"SEVERITY","affected_sectors":[],"block_new_longs":false}' >> .trader/logs/agent.jsonl
+echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conductor","event":"GEO_SCAN","severity":"SEVERITY","affected_sectors":[],"raise_consensus_threshold":false}' >> .trader/logs/agent.jsonl
 ```
 
 Pass `geo_context` to **all** specialist agents in Step 6.
@@ -178,18 +178,22 @@ except: print(json.dumps({'fresh': False}))
 ```
 
 **If proposals are fresh (< 2 hours old):**
-- Skip `opportunity-finder` dispatch — the Scout and Analyst have already done this work
+- Skip `pipeline (discover → analyze)` dispatch — the Scout and Analyst have already done this work
 - Read proposals directly and proceed to Step 7 (guardrail review) for each proposal
 - For **long** proposals, execute bracket orders: `uv run trader orders buy TICKER QTY --type bracket --price PRICE --stop-loss SL --take-profit TP`
 - For **hedge** proposals with options: `uv run trader orders buy TICKER QTY --contract-type option --right put --strike STRIKE --expiry EXPIRY`
 - For **ETF** proposals: `uv run trader orders buy TICKER QTY --type limit --price PRICE --contract-type etf`
 - Still run `risk-monitor`, `portfolio-health`, and `order-alert-manager` for position management
 
-**If proposals are stale or missing:** Fall back to the specialist dispatch workflow below.
+**If proposals are stale or missing:** Refresh proposals by running the pipeline:
+```bash
+uv run trader pipeline run --dry
+```
+This runs discover → analyze and writes fresh `candidates.json` + `proposals.json`. Then read the proposals and proceed to Step 7.
 
 ### 5c. Decide workflow
 
-**Bootstrap detection:** If positions = 0 AND open buy orders = 0 (a fresh or reset account), set `bootstrap = true`. Pass this flag to `opportunity-finder` and `portfolio-health` so they know to propose a full initial allocation rather than incremental adjustments. Skip `risk-monitor` (nothing to protect) and skip `strategy-optimizer` (no history to optimise yet). Note: orphaned GTC stop orders with no matching position or buy order do NOT count — `order-alert-manager` will cancel them in Step 6.
+**Bootstrap detection:** If positions = 0 AND open buy orders = 0 (a fresh or reset account), set `bootstrap = true`. Pass this flag to `pipeline (discover → analyze)` and `portfolio-health` so they know to propose a full initial allocation rather than incremental adjustments. Skip `risk-monitor` (nothing to protect) and skip `strategy-optimizer` (no history to optimise yet). Note: orphaned GTC stop orders with no matching position or buy order do NOT count — `order-alert-manager` will cancel them in Step 6.
 
 **Bootstrap position limit:** When `bootstrap = true`, use `max_new_positions_bootstrap` (default 6) instead of the per-slot and per-day limits. Bootstrap orders do **not** count toward `max_new_positions_per_day` or `max_new_positions_per_slot` — they are a one-time portfolio establishment event, not normal trading activity. Log each bootstrap order with `"bootstrap": true` in the ORDER_INTENT event.
 
@@ -199,12 +203,12 @@ Based on time slot, portfolio state, and recent log:
 - **Always** run `portfolio-health` (surfaces drift even when no action needed)
 - **Always** run `order-alert-manager` — pass it any proposals from other specialists plus the current snapshot
 - **Always (any slot with open positions)** → run `market-news-analyst` on all held tickers + watchlist tickers; pass output to `risk-monitor` so it can flag positions with fresh negative catalysts
-- **eu-pre-market** → run `economic-calendar-fetcher` first (gate: if 2+ High-impact EU events today, set `risk_mode=ELEVATED` and skip `opportunity-finder`); then run `opportunity-finder` scoped to EU exchanges
-- **eu-market** → run `opportunity-finder` for EU stocks; check US pre-market news/sentiment for US positions held via `market-news-analyst`
-- **eu-us-overlap** → run `opportunity-finder` for both universes; highest-priority window for entries and exits
-- **us-market** → run `economic-calendar-fetcher` first (gate: if High-impact US events today, set `risk_mode=ELEVATED`); then run `opportunity-finder` scoped to US exchanges only
-- Any intraday slot → run `opportunity-finder` only if no opportunity signal was logged in the last 4 hours
-- **bi-weekly** (15th) → run `strategy-optimizer` + `order-alert-manager`; skip `opportunity-finder` unless pre-market
+- **eu-pre-market** → run `economic-calendar-fetcher` first (gate: if 2+ High-impact EU events today, set `risk_mode=ELEVATED` and skip `pipeline (discover → analyze)`); then run `pipeline (discover → analyze)` scoped to EU exchanges
+- **eu-market** → run `pipeline (discover → analyze)` for EU stocks; check US pre-market news/sentiment for US positions held via `market-news-analyst`
+- **eu-us-overlap** → run `pipeline (discover → analyze)` for both universes; highest-priority window for entries and exits
+- **us-market** → run `economic-calendar-fetcher` first (gate: if High-impact US events today, set `risk_mode=ELEVATED`); then run `pipeline (discover → analyze)` scoped to US exchanges only
+- Any intraday slot → run `pipeline (discover → analyze)` only if no opportunity signal was logged in the last 4 hours
+- **bi-weekly** (15th) → run `strategy-optimizer` + `order-alert-manager`; skip `pipeline (discover → analyze)` unless pre-market
 - **weekly** (Sunday) → run `portfolio-health` deep review + `market-top-detector` (market regime assessment) + `sector-analyst` (sector rotation check) + performance review: scan agent.jsonl for ORDER_INTENTs, match to current positions/evolution log, compute win rate and log it
 - **monthly** (1st) → run `strategy-optimizer` + `system-improver` (30-day review window); `system-improver` audits decision quality, evaluates metric relevance, and proposes or applies system improvements
 - **"Do nothing" is always valid** — if situation is calm and no strong signals exist, log it and exit
@@ -226,21 +230,21 @@ Use the Agent tool to invoke each specialist. Pass full context in the prompt:
 - Portfolio profile
 - Guardrails (from profile.portfolio_targets)
 - Current time slot
-- `geo_context` (from Step 5) — all specialists must respect affected sectors and block_new_longs flag
+- `geo_context` (from Step 5) — all specialists must respect affected sectors and raise_consensus_threshold flag
 
-**If `geo_context.block_new_longs = true`:** skip `opportunity-finder` entirely; instruct `risk-monitor` to flag any existing positions in `geo_context.affected_sectors` for protective stops.
+**If `geo_context.raise_consensus_threshold = true`:** still run pipeline (discover → analyze) but apply tightened thresholds (consensus >= 5/6 + positive sentiment) to any proposals; instruct `risk-monitor` to flag any existing positions in `geo_context.affected_sectors` for protective stops.
 
 **Dispatch order (respect dependencies):**
 1. `economic-calendar-fetcher` → sets `risk_mode`
 2. `market-news-analyst` (positions + watchlist) → produces `news_context` (per-ticker sentiment + catalysts)
 3. `risk-monitor` (receives `news_context` + `geo_context` + snapshot)
 4. `portfolio-health` (receives snapshot + profile)
-5. `opportunity-finder` (receives `news_context` + `geo_context` + `risk_mode` + snapshot)
+5. `pipeline (discover → analyze)` (receives `news_context` + `geo_context` + `risk_mode` + snapshot)
 6. `order-alert-manager` (receives all proposals + snapshot)
 
 Collect each specialist's JSON proposals.
 
-**Proposal consolidation:** After collecting all specialist outputs, pass any `ALERT_PROPOSAL` and `ORDER_PROPOSAL` objects from opportunity-finder and strategy-optimizer to `order-alert-manager` along with the snapshot. Collect its action list before proceeding to Step 7.
+**Proposal consolidation:** After collecting all specialist outputs, pass any `ALERT_PROPOSAL` and `ORDER_PROPOSAL` objects from pipeline (discover → analyze) and strategy-optimizer to `order-alert-manager` along with the snapshot. Collect its action list before proceeding to Step 7.
 
 ### 7. Review proposals against guardrails
 
@@ -321,12 +325,12 @@ uv run trader orders sell TICKER SHARES --type limit --price PRICE
 
 ### Bearish trade decision tree
 
-When a proposal has `signal: -1` (from pullback, opportunity-finder, or risk-monitor hedge suggestion), auto-dispatch follows this priority:
+When a proposal has `signal: -1` (from pullback, pipeline (discover → analyze), or risk-monitor hedge suggestion), auto-dispatch follows this priority:
 
 1. **Put option available** (from `--with-options` overlay) → execute `buy put` — defined risk, no margin required
 2. **Put spread recommended** (from options_selector `select_spread()`) → execute both legs — lower premium, still defined risk
 3. **Inverse ETF mapped** (check `.trader/inverse_etfs.json` for the underlying index/sector) → execute `buy INVERSE_ETF` — simpler, no expiry management
-4. **Equity shortable** (confirmed by opportunity-finder) → execute `short TICKER` with bracket stop — unlimited risk, use only with strong conviction + tight stop
+4. **Equity shortable** (confirmed by pipeline (discover → analyze)) → execute `short TICKER` with bracket stop — unlimited risk, use only with strong conviction + tight stop
 5. **No viable bearish vehicle** → log as `BEARISH_SIGNAL_NO_VEHICLE` and skip
 
 **Autonomous execution for bearish signals:** When `AGENT_MODE=autonomous`, bearish trades follow the same auto-dispatch as long trades — no human intervention required. The decision tree above applies automatically. Always log `ORDER_INTENT` with `"direction": "bearish"` before execution.
@@ -374,11 +378,11 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 
 ## What Good Looks Like
 
-- Calm day, healthy positions → risk-monitor clean, health shows minor drift, opportunity-finder finds nothing → log "do nothing", exit cleanly
-- Strong pre-market signal → opportunity-finder surfaces VCP breakout in semiconductors → position-sizer sizes it → conductor logs intent → executes limit order
+- Calm day, healthy positions → risk-monitor clean, health shows minor drift, pipeline (discover → analyze) finds nothing → log "do nothing", exit cleanly
+- Strong pre-market signal → pipeline (discover → analyze) surfaces VCP breakout in semiconductors → position-sizer sizes it → conductor logs intent → executes limit order
 - Position down 22% → risk-monitor flags tail risk → conductor places stop or trims
 - Pullback fires -1 on NVDA → options overlay returns put recommendation → conductor auto-executes buy put → logs `ORDER_INTENT` with `direction: bearish`
-- Geo scan = High severity → conductor checks inverse ETF map → buys XISX (short S&P 500) as portfolio hedge → blocks new longs
+- Geo scan = High severity → conductor checks inverse ETF map → buys XISX (short S&P 500) as portfolio hedge → raises consensus threshold to 5/6 for new longs
 - Put position at 10 DTE, up 60% → conductor sells to close, logs `OPTIONS_MGMT` event
 - Put spread short leg breached → spread has capped loss → conductor holds, logs monitoring note
 

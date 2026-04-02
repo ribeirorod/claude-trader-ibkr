@@ -1,0 +1,6 @@
+{
+  "bear": {
+    "rsi": {"period": 9, "oversold": 20, "overbought": 60},
+    "macd": {"fast": 5, "slow": 13, "signal": 5}
+  }
+}

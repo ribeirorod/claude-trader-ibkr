@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 import numpy as np
 from trader.pipeline.analyze import run_analyze
-from trader.pipeline.models import Candidate, CandidateSet, ProposalSet
+from trader.pipeline.models import Candidate, CandidateNews, CandidateSet, ProposalSet
 
 
 def _make_ohlcv(days=60, trend="up"):
@@ -116,3 +116,52 @@ def test_analyze_bear_regime_allows_longs(tmp_path):
 
     # Proposals should exist if strategies signal buy — bear regime doesn't filter them
     assert (pipeline_dir / "proposals.json").exists()
+
+
+def test_analyze_filters_on_bearish_sentiment(tmp_path):
+    """Bearish sentiment (score < -0.2) should filter out long proposals via RiskFilter."""
+    # Create a candidate with bearish news and negative ticker_sentiment
+    bearish_news = [
+        CandidateNews(headline="Company faces massive lawsuit", sentiment=-0.8),
+        CandidateNews(headline="Revenue misses expectations badly", sentiment=-0.7),
+        CandidateNews(headline="CEO resigns amid scandal", sentiment=-0.9),
+    ]
+    candidate = Candidate(
+        ticker="BADNEWS",
+        source="watchlist",
+        priority="high",
+        sector="Technology",
+        news=bearish_news,
+    )
+    cs = CandidateSet(
+        run_id="test",
+        regime="bull",
+        sectors={"Technology": [candidate]},
+        ticker_sentiment={"BADNEWS": -0.5},  # strongly bearish
+    )
+
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "candidates.json").write_text(cs.model_dump_json())
+
+    with patch("trader.pipeline.analyze._fetch_ohlcv", return_value=_make_ohlcv(trend="up")):
+        result = run_analyze(
+            pipeline_dir=pipeline_dir,
+            regime="bull",
+            account_value=100_000.0,
+            existing_positions=[],
+            open_orders=[],
+            consensus_threshold=1,
+            watchlist_consensus_threshold=1,
+        )
+
+    # The bearish sentiment should cause RiskFilter to veto any long proposal
+    long_tickers = [
+        p.ticker
+        for sp in result.sectors.values()
+        for p in sp.proposals
+        if p.direction == "long"
+    ]
+    assert "BADNEWS" not in long_tickers, (
+        "Bearish sentiment (score=-0.5) should filter out long proposals"
+    )
