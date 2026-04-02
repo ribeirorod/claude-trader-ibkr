@@ -248,6 +248,17 @@ def execute(ctx, max_orders: int, dry_run: bool):
     ]
     all_proposals.sort(key=lambda p: p.rank)
 
+    # Geo-context gate: drop long proposals when geopolitical severity is high
+    geo = proposal_set.geo_context
+    if geo and geo.block_new_longs:
+        blocked = [p for p in all_proposals if p.direction == "long"]
+        all_proposals = [p for p in all_proposals if p.direction != "long"]
+        if blocked:
+            logger.warning(
+                "Geo-context blocking %d long proposal(s): %s",
+                len(blocked), [b.ticker for b in blocked],
+            )
+
     to_execute = all_proposals[:max_orders]
 
     if not to_execute:

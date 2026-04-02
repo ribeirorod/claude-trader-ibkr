@@ -171,6 +171,73 @@ def test_execute_rejects_when_guard_blocks(tmp_path):
     mock_adapter.place_order.assert_not_called()
 
 
+def test_execute_blocks_longs_when_geo_severity_high(tmp_path):
+    """Geo-context with severity=high should block all long proposals."""
+    from trader.pipeline.models import (
+        ProposalSet, SectorProposals, Proposal, ProposalOrder, ProposalSizing,
+        GeoContext,
+    )
+
+    runner = CliRunner()
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+
+    proposal_set = ProposalSet(
+        run_id="test-geo",
+        regime="bull",
+        available_capital=100_000.0,
+        geo_context=GeoContext(severity="high", events=["war escalation"]),
+        sectors={
+            "Technology": SectorProposals(
+                summary="test",
+                proposals=[
+                    Proposal(
+                        rank=1,
+                        ticker="AAPL",
+                        source="discovery",
+                        direction="long",
+                        consensus=4,
+                        strategies_agree=["RSI", "MACD", "MACross", "BNF"],
+                        conviction="high",
+                        order=ProposalOrder(
+                            side="buy",
+                            order_type="limit",
+                            contract_type="stock",
+                            qty=10,
+                            price=150.0,
+                            stop_loss=145.0,
+                            take_profit=160.0,
+                        ),
+                        sizing=ProposalSizing(
+                            atr=3.5,
+                            risk_per_share=5.0,
+                            position_value=1500.0,
+                            pct_of_nlv=0.015,
+                        ),
+                        sector="Technology",
+                    ),
+                ],
+            ),
+        },
+    )
+    (pipeline_dir / "proposals.json").write_text(proposal_set.model_dump_json())
+
+    with patch("trader.cli.pipeline._get_pipeline_dir", return_value=pipeline_dir), \
+         patch("trader.cli.pipeline.get_adapter") as mock_adapter_factory:
+
+        mock_adapter = AsyncMock()
+        mock_adapter_factory.return_value = mock_adapter
+
+        result = runner.invoke(cli, ["pipeline", "execute"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+
+    # All longs blocked — no proposals to execute
+    assert data["status"] == "no_proposals"
+    mock_adapter.place_order.assert_not_called()
+
+
 def test_pipeline_run_dry_skips_execute(tmp_path):
     """pipeline run --dry invokes discover and analyze but NOT execute."""
     import click

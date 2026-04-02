@@ -26,6 +26,11 @@ class GeoContext(BaseModel):
     raise_consensus_threshold: bool = False
     hedge_suggested: bool = False
 
+    @property
+    def block_new_longs(self) -> bool:
+        """Block new long entries when geopolitical severity is high."""
+        return self.severity == "high"
+
 
 class CandidateSet(BaseModel):
     run_id: str
