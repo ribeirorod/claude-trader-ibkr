@@ -32,21 +32,7 @@ _MAX_POSITION_PCT = 10.0
 # Minimum price for candidates (filter out penny stocks with unreliable signals)
 _MIN_PRICE = 1.0
 
-# Re-use the yfinance ticker resolution from strategies CLI
-_YF_TICKER_MAP: dict[str, str] = {
-    "CSPX": "CSPX.L", "VUSA": "VUSA.AS", "IWDA": "IWDA.L", "SWDA": "SWDA.L",
-    "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L",
-    "SGLN": "SGLN.L", "PHAU": "PHAU.L", "AGGH": "AGGG.L", "IBTA": "IBTA.L",
-    "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
-    # Inverse / short ETFs (UCITS)
-    "XSPD": "DXS3.DE", "XISP": "XISP.L", "DSPX": "DSPX.L",
-    # European defense (no exchange suffix in watchlist)
-    "RHM": "RHM.DE",
-}
-
-
-def _resolve_yf_ticker(ticker: str) -> str:
-    return _YF_TICKER_MAP.get(ticker.upper(), ticker)
+from trader.market.ticker_map import resolve_yf_ticker as _resolve_yf_ticker
 
 
 def _fetch_ohlcv(ticker: str, period: str = "90d") -> pd.DataFrame:

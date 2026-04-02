@@ -16,20 +16,7 @@ from trader.cli.__main__ import output_json
 def strategies():
     """Strategy signals, backtesting, and parameter optimization."""
 
-# UCITS ETFs listed on LSE (.L), XETRA (.DE), or Euronext (.AS) need exchange suffixes in yfinance.
-# Map short tickers (as used everywhere in this system) to their yfinance symbols.
-_YF_TICKER_MAP: dict[str, str] = {
-    "CSPX": "CSPX.L", "VUSA": "VUSA.AS", "IWDA": "IWDA.L", "SWDA": "SWDA.L",
-    "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L",
-    "SGLN": "SGLN.L", "PHAU": "PHAU.L", "AGGH": "AGGG.L", "IBTA": "IBTA.L",
-    "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
-    # Inverse / short ETFs (UCITS)
-    "XSPD": "DXS3.DE", "XISP": "XISP.L", "DSPX": "DSPX.L",
-}
-
-def _resolve_yf_ticker(ticker: str) -> str:
-    """Return the yfinance symbol for a ticker, adding exchange suffix for known UCITS ETFs."""
-    return _YF_TICKER_MAP.get(ticker.upper(), ticker)
+from trader.market.ticker_map import resolve_yf_ticker as _resolve_yf_ticker
 
 def _fetch_ohlcv(ticker: str, interval: str, lookback: str) -> pd.DataFrame:
     df = yf.download(_resolve_yf_ticker(ticker), period=lookback, interval=interval, progress=False, auto_adjust=True)
