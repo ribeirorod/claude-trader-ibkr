@@ -131,13 +131,13 @@ Build `geo_context` object:
   "events": ["brief description"],
   "affected_sectors": ["energy", "semiconductors", "defense"],
   "affected_tickers": ["ASML", "NVDA"],
-  "block_new_longs": false,
+  "raise_consensus_threshold": false,
   "hedge_suggested": false
 }
 ```
 
 Rules:
-- `severity = High` → set `block_new_longs: true` (no new entries until hedge confirmed); set `hedge_suggested: true`; auto-dispatch hedge using the bearish decision tree (prefer inverse ETF from `.trader/inverse_etfs.json`, then index puts)
+- `severity = High` → set `raise_consensus_threshold: true` (require consensus >= 5/6 AND strong positive sentiment for any new longs); set `hedge_suggested: true`; auto-dispatch hedge using the bearish decision tree (prefer inverse ETF from `.trader/inverse_etfs.json`, then index puts)
 - `severity = Medium` → pass affected sectors to pipeline (discover → analyze) as exclusions; consider sector-specific puts if affected_tickers overlap with held positions
 - `severity = Low/None` → pass geo_context with empty lists; no action
 
@@ -150,7 +150,7 @@ Rules:
 
 Log the scan result:
 ```bash
-echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conductor","event":"GEO_SCAN","severity":"SEVERITY","affected_sectors":[],"block_new_longs":false}' >> .trader/logs/agent.jsonl
+echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conductor","event":"GEO_SCAN","severity":"SEVERITY","affected_sectors":[],"raise_consensus_threshold":false}' >> .trader/logs/agent.jsonl
 ```
 
 Pass `geo_context` to **all** specialist agents in Step 6.
@@ -230,9 +230,9 @@ Use the Agent tool to invoke each specialist. Pass full context in the prompt:
 - Portfolio profile
 - Guardrails (from profile.portfolio_targets)
 - Current time slot
-- `geo_context` (from Step 5) — all specialists must respect affected sectors and block_new_longs flag
+- `geo_context` (from Step 5) — all specialists must respect affected sectors and raise_consensus_threshold flag
 
-**If `geo_context.block_new_longs = true`:** skip `pipeline (discover → analyze)` entirely; instruct `risk-monitor` to flag any existing positions in `geo_context.affected_sectors` for protective stops.
+**If `geo_context.raise_consensus_threshold = true`:** still run pipeline (discover → analyze) but apply tightened thresholds (consensus >= 5/6 + positive sentiment) to any proposals; instruct `risk-monitor` to flag any existing positions in `geo_context.affected_sectors` for protective stops.
 
 **Dispatch order (respect dependencies):**
 1. `economic-calendar-fetcher` → sets `risk_mode`
@@ -382,7 +382,7 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","run_id":"RUN_ID","agent":"conduc
 - Strong pre-market signal → pipeline (discover → analyze) surfaces VCP breakout in semiconductors → position-sizer sizes it → conductor logs intent → executes limit order
 - Position down 22% → risk-monitor flags tail risk → conductor places stop or trims
 - Pullback fires -1 on NVDA → options overlay returns put recommendation → conductor auto-executes buy put → logs `ORDER_INTENT` with `direction: bearish`
-- Geo scan = High severity → conductor checks inverse ETF map → buys XISX (short S&P 500) as portfolio hedge → blocks new longs
+- Geo scan = High severity → conductor checks inverse ETF map → buys XISX (short S&P 500) as portfolio hedge → raises consensus threshold to 5/6 for new longs
 - Put position at 10 DTE, up 60% → conductor sells to close, logs `OPTIONS_MGMT` event
 - Put spread short leg breached → spread has capped loss → conductor holds, logs monitoring note
 

@@ -23,7 +23,7 @@ class GeoContext(BaseModel):
     severity: str = "none"  # "high" | "medium" | "low" | "none"
     events: list[str] = []
     affected_sectors: list[str] = []
-    block_new_longs: bool = False
+    raise_consensus_threshold: bool = False
     hedge_suggested: bool = False
 
 
@@ -93,11 +93,20 @@ class SectorProposals(BaseModel):
     proposals: list[Proposal] = []
 
 
+class VixContext(BaseModel):
+    current: float = 0.0
+    peak: float = 0.0
+    days_since_peak: int = 0
+    blocked: bool = False
+    reason: str | None = None
+
+
 class ProposalSet(BaseModel):
     run_id: str
     regime: str
     available_capital: float = 0.0
     geo_context: GeoContext = GeoContext()
+    vix_context: VixContext = VixContext()
     sectors: dict[str, SectorProposals] = {}
 
     @computed_field

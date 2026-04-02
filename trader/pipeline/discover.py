@@ -324,7 +324,7 @@ async def _scan_geo_context(news_fn: Callable) -> GeoContext:
         severity=severity,
         events=unique_events[:5],
         affected_sectors=sorted(affected),
-        block_new_longs=severity == "high",
+        raise_consensus_threshold=severity == "high",
         hedge_suggested=severity in ("high", "medium"),
     )
 

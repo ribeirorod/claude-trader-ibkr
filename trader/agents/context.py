@@ -58,6 +58,9 @@ def build_context(
             "max_single_position_pct": targets.get("max_single_position_pct", 10) / 100,
             "max_new_positions_per_day": targets.get("max_new_positions_per_day", 3),
             "target_cash_reserve_pct": effective_cash_floor,
-            "block_new_longs": regime == "bear",
+            "min_consensus_for_longs": 4 if regime == "bear" else 3 if regime == "caution" else 2,
+            "require_positive_sentiment_for_longs": regime == "bear",
+            "position_sizing_pct": 30 if regime == "bear" else 50 if regime == "caution" else 100,
+            "atr_stop_multiplier": 1.0 if regime == "bear" else 1.5 if regime == "caution" else 2.0,
         },
     }
