@@ -59,6 +59,8 @@ def _parse_entry_dates(agent_log_path: Path) -> dict[str, datetime]:
             ts = datetime.fromisoformat(ts_str)
         except ValueError:
             continue
+        # Strip timezone info so comparisons work with naive datetimes
+        ts = ts.replace(tzinfo=None)
         if ticker not in entries or ts < entries[ticker]:
             entries[ticker] = ts
     return entries
