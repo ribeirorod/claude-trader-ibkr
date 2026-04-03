@@ -63,7 +63,11 @@ def _run_pipeline_discover() -> dict | None:
 
 
 def _build_message(candidate_set: dict) -> str | None:
-    """Format candidates into a Telegram message."""
+    """Format candidates into a concise Telegram message.
+
+    Only surfaces actionable info: tickers with sentiment or news.
+    Sectors shown as counts, not individual ticker lists.
+    """
     regime = candidate_set.get("regime", "unknown")
     sectors = candidate_set.get("sectors", {})
     ticker_sentiment = candidate_set.get("ticker_sentiment", {})
@@ -76,31 +80,52 @@ def _build_message(candidate_set: dict) -> str | None:
 
     now = datetime.now().strftime("%a %d %b  %H:%M CET")
     lines = [
-        f"*PIPELINE DISCOVER — {now}*",
-        f"Regime: {regime.upper()}  |  {total} candidates ({watchlist_count} watchlist, {discovery_count} scan)",
+        f"<b>DISCOVER — {now}</b>",
+        f"{regime.upper()} · {total} candidates ({watchlist_count} WL + {discovery_count} scan)",
     ]
 
-    for sector_name, candidates in sorted(sectors.items()):
-        if not candidates:
-            continue
-        lines.append(f"\n*{sector_name}*")
-        rows = []
+    # Collect tickers with notable sentiment or news
+    movers: list[tuple[str, float, int]] = []  # (ticker, sentiment, news_count)
+    for candidates in sectors.values():
         for c in candidates:
-            source_tag = "WL" if c.get("source") == "watchlist" else "SC"
             ticker = c.get("ticker", "?")
             sentiment = ticker_sentiment.get(ticker, 0.0)
-            if sentiment > 0.1:
-                sent_icon = "+"
-            elif sentiment < -0.1:
-                sent_icon = "-"
-            else:
-                sent_icon = " "
             news_count = len(c.get("news", []))
-            news_str = f"  {news_count}n" if news_count > 0 else ""
-            rows.append(f"{source_tag} {ticker:<7} {sent_icon}{sentiment:+.2f}{news_str}")
-        lines.append("```")
-        lines.append("\n".join(rows))
-        lines.append("```")
+            if abs(sentiment) > 0.05 or news_count > 0:
+                movers.append((ticker, sentiment, news_count))
+
+    # Sort by abs(sentiment) descending
+    movers.sort(key=lambda x: abs(x[1]), reverse=True)
+
+    if movers:
+        lines.append("")
+        lines.append("<b>Movers</b>")
+        rows = []
+        for ticker, sentiment, news_count in movers[:15]:
+            arrow = "▲" if sentiment > 0.05 else "▼" if sentiment < -0.05 else "·"
+            news_tag = f"  ({news_count}n)" if news_count > 0 else ""
+            rows.append(f"  {arrow} {ticker:<8} {sentiment:+.2f}{news_tag}")
+        lines.append("<pre>" + "\n".join(rows) + "</pre>")
+        if len(movers) > 15:
+            lines.append(f"  ...+{len(movers) - 15} more")
+
+    # Sector summary as counts (skip "Unknown")
+    sector_counts = []
+    for name, candidates in sorted(sectors.items()):
+        if not candidates or name == "Unknown":
+            continue
+        sector_counts.append((name, len(candidates)))
+    sector_counts.sort(key=lambda x: x[1], reverse=True)
+
+    if sector_counts:
+        lines.append("")
+        lines.append("<b>Sectors</b>")
+        top = sector_counts[:8]
+        sector_parts = [f"{name} ({count})" for name, count in top]
+        lines.append("  " + ", ".join(sector_parts))
+        remaining = len(sector_counts) - len(top)
+        if remaining > 0:
+            lines.append(f"  ...+{remaining} more sectors")
 
     return "\n".join(lines)
 
@@ -118,7 +143,7 @@ def main() -> None:
         log.info("No candidates found — nothing to send.")
         return
 
-    ok = send_telegram(msg, config=cfg, parse_mode="Markdown")
+    ok = send_telegram(msg, config=cfg, parse_mode="HTML")
     if ok:
         total = cs.get("total_candidates", 0)
         log.info("Pipeline discover report sent (%d candidates).", total)

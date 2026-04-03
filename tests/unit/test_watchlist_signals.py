@@ -1,10 +1,8 @@
-"""Tests for scripts/watchlist-signals.py — TDD, written before the script."""
+"""Tests for scripts/watchlist-signals.py _build_message formatting."""
 from __future__ import annotations
 
 import importlib.util as _ilu
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 
 def _load_module():
@@ -20,145 +18,145 @@ def _load_module():
 _mod = _load_module()
 
 
-# ── _fmt_signal_row ────────────────────────────────────────────────────────────
-
-def test_fmt_signal_row_buy_with_sentiment():
-    row = _mod._fmt_signal_row({
-        "ticker": "NVDA",
-        "signal": 1,
-        "signal_label": "buy",
-        "strategy": "rsi",
-        "sentiment_score": 0.60,
-        "filtered": False,
-    })
-    assert row.startswith("BUY ")
-    assert "NVDA" in row
-    assert "+0.60" in row
-
-
-def test_fmt_signal_row_sell_no_sentiment():
-    row = _mod._fmt_signal_row({
-        "ticker": "ASML",
-        "signal": -1,
-        "signal_label": "sell",
-        "strategy": "macd",
-        "sentiment_score": None,
-        "filtered": False,
-    })
-    assert "SELL" in row
-    assert "sentiment" not in row.lower()
-
-
-def test_fmt_signal_row_filtered_shows_reason():
-    row = _mod._fmt_signal_row({
-        "ticker": "TSLA",
-        "signal": 1,
-        "signal_label": "buy",
-        "strategy": "rsi",
-        "sentiment_score": 0.10,
-        "filtered": True,
-        "filter_reason": "low sentiment",
-    })
-    assert "[low sentiment]" in row
-
-
-def test_fmt_signal_row_filtered_escapes_underscores():
-    """Underscores in filter_reason are escaped for Telegram Markdown safety."""
-    row = _mod._fmt_signal_row({
-        "ticker": "TSLA",
-        "signal": 1,
-        "signal_label": "buy",
-        "strategy": "rsi",
-        "sentiment_score": 0.10,
-        "filtered": True,
-        "filter_reason": "low_sentiment",
-    })
-    assert r"low\_sentiment" in row
-    assert "[low\\_sentiment]" in row
-
-
-# ── _load_watchlists ───────────────────────────────────────────────────────────
-
-def test_load_watchlists_missing_file(tmp_path):
-    with patch.object(_mod, "WATCHLISTS_PATH", tmp_path / "nope.json"):
-        result = _mod._load_watchlists()
-    assert result == {}
-
-
-def test_load_watchlists_existing(tmp_path):
-    data = {"default": ["NVDA", "AAPL"], "tr-portfolio": ["ASML"]}
-    wl_file = tmp_path / "watchlists.json"
-    wl_file.write_text(json.dumps(data))
-    with patch.object(_mod, "WATCHLISTS_PATH", wl_file):
-        result = _mod._load_watchlists()
-    assert result == data
-
-
-# ── _run_signals ───────────────────────────────────────────────────────────────
-
-def test_run_signals_subprocess_failure():
-    fake_result = MagicMock()
-    fake_result.returncode = 1
-    fake_result.stderr = "some error"
-    with patch("subprocess.run", return_value=fake_result):
-        result = _mod._run_signals(["NVDA", "AAPL"])
-    assert result == []
-
-
-def test_run_signals_json_decode_error():
-    """Returncode 0 but non-JSON stdout returns []."""
-    fake = type("R", (), {"returncode": 0, "stderr": "", "stdout": "not json"})()
-    with patch("subprocess.run", return_value=fake):
-        assert _mod._run_signals(["NVDA"]) == []
-
-
 # ── _build_message ─────────────────────────────────────────────────────────────
 
-def test_build_message_all_empty_returns_none():
-    assert _mod._build_message({}) is None
-    assert _mod._build_message({"default": []}) is None
+def test_build_message_empty_returns_none():
+    assert _mod._build_message({"total_candidates": 0, "sectors": {}}) is None
 
 
-def test_build_message_groups_buy_sell_hold():
-    signals = [
-        {"ticker": "NVDA", "signal": 1,  "signal_label": "buy",  "strategy": "rsi",  "sentiment_score": 0.5,  "filtered": False},
-        {"ticker": "ASML", "signal": -1, "signal_label": "sell", "strategy": "macd", "sentiment_score": -0.3, "filtered": False},
-        {"ticker": "AAPL", "signal": 0,  "signal_label": "hold", "strategy": "rsi",  "sentiment_score": None, "filtered": False},
-    ]
-    with patch.object(_mod, "_run_signals", return_value=signals):
-        msg = _mod._build_message({"default": ["NVDA", "ASML", "AAPL"]})
+def test_build_message_summary_line():
+    cs = {
+        "regime": "bear",
+        "total_candidates": 5,
+        "watchlist_count": 3,
+        "discovery_count": 2,
+        "sectors": {"Tech": [{"ticker": "AAPL", "source": "watchlist", "news": []}]},
+        "ticker_sentiment": {},
+    }
+    msg = _mod._build_message(cs)
     assert msg is not None
-    assert "BUY" in msg
-    assert "SELL" in msg
-    assert "HOLD" in msg
-    assert "*default*" in msg
+    assert "BEAR" in msg
+    assert "5 candidates" in msg
+    assert "3 WL + 2 scan" in msg
 
 
-def test_build_message_skips_empty_lists():
-    signals = [
-        {"ticker": "NVDA", "signal": 1, "signal_label": "buy", "strategy": "rsi", "sentiment_score": 0.4, "filtered": False},
-    ]
+def test_build_message_shows_movers_with_sentiment():
+    cs = {
+        "regime": "bull",
+        "total_candidates": 2,
+        "watchlist_count": 2,
+        "discovery_count": 0,
+        "sectors": {
+            "Tech": [
+                {"ticker": "MSFT", "source": "watchlist", "news": ["headline1", "headline2"]},
+                {"ticker": "AAPL", "source": "watchlist", "news": []},
+            ],
+        },
+        "ticker_sentiment": {"MSFT": -0.28, "AAPL": 0.0},
+    }
+    msg = _mod._build_message(cs)
+    assert "Movers" in msg
+    assert "MSFT" in msg
+    assert "-0.28" in msg
+    # AAPL has 0.0 sentiment and no news — should NOT appear in movers
+    assert "AAPL" not in msg
 
-    def fake_run_signals(tickers):
-        if tickers == ["NVDA"]:
-            return signals
-        return []
 
-    with patch.object(_mod, "_run_signals", side_effect=fake_run_signals):
-        msg = _mod._build_message({"active": ["NVDA"], "empty-list": []})
-    assert msg is not None
-    assert "*active*" in msg
-    assert "empty-list" not in msg
+def test_build_message_shows_news_tickers():
+    cs = {
+        "regime": "caution",
+        "total_candidates": 1,
+        "watchlist_count": 1,
+        "discovery_count": 0,
+        "sectors": {
+            "Mining": [
+                {"ticker": "AAL", "source": "watchlist", "news": ["some headline"]},
+            ],
+        },
+        "ticker_sentiment": {"AAL": 0.0},
+    }
+    msg = _mod._build_message(cs)
+    # AAL has news even though sentiment is 0.0
+    assert "AAL" in msg
+    assert "(1n)" in msg
 
 
-def test_build_message_handles_ticker_error():
-    signals = [
-        {"ticker": "NVDA", "signal": 1, "signal_label": "buy", "strategy": "rsi", "sentiment_score": 0.5, "filtered": False},
-        {"ticker": "FAIL", "error": "timeout fetching data"},
-    ]
-    with patch.object(_mod, "_run_signals", return_value=signals):
-        # Must not raise KeyError
-        msg = _mod._build_message({"default": ["NVDA", "FAIL"]})
-    assert msg is not None
-    assert "ERR" in msg
-    assert "FAIL" in msg
+def test_build_message_sector_counts():
+    cs = {
+        "regime": "bull",
+        "total_candidates": 6,
+        "watchlist_count": 0,
+        "discovery_count": 6,
+        "sectors": {
+            "Gold Mining": [
+                {"ticker": "GGP", "source": "scan", "news": []},
+                {"ticker": "CDE", "source": "scan", "news": []},
+                {"ticker": "AG", "source": "scan", "news": []},
+            ],
+            "Oil": [
+                {"ticker": "PBR", "source": "scan", "news": []},
+            ],
+            "Tech": [
+                {"ticker": "MSFT", "source": "scan", "news": []},
+                {"ticker": "AAPL", "source": "scan", "news": []},
+            ],
+        },
+        "ticker_sentiment": {},
+    }
+    msg = _mod._build_message(cs)
+    assert "Sectors" in msg
+    assert "Gold Mining (3)" in msg
+    assert "Tech (2)" in msg
+    assert "Oil (1)" in msg
+
+
+def test_build_message_skips_unknown_sector():
+    cs = {
+        "regime": "bull",
+        "total_candidates": 3,
+        "watchlist_count": 3,
+        "discovery_count": 0,
+        "sectors": {
+            "Unknown": [
+                {"ticker": "ARMR", "source": "watchlist", "news": []},
+                {"ticker": "BA.", "source": "watchlist", "news": []},
+                {"ticker": "RHM", "source": "watchlist", "news": []},
+            ],
+        },
+        "ticker_sentiment": {},
+    }
+    msg = _mod._build_message(cs)
+    # "Unknown" sector should not appear in sector counts
+    assert "Unknown" not in msg
+
+
+def test_build_message_limits_movers_to_15():
+    candidates = [{"ticker": f"T{i}", "source": "scan", "news": []} for i in range(20)]
+    # All sentiment values have abs > 0.05 so all qualify as movers
+    sentiment = {f"T{i}": 0.5 + i * 0.01 for i in range(20)}
+    cs = {
+        "regime": "bull",
+        "total_candidates": 20,
+        "watchlist_count": 0,
+        "discovery_count": 20,
+        "sectors": {"Tech": candidates},
+        "ticker_sentiment": sentiment,
+    }
+    msg = _mod._build_message(cs)
+    assert "+5 more" in msg
+
+
+def test_build_message_uses_html():
+    cs = {
+        "regime": "bear",
+        "total_candidates": 1,
+        "watchlist_count": 1,
+        "discovery_count": 0,
+        "sectors": {"Tech": [{"ticker": "MSFT", "source": "watchlist", "news": []}]},
+        "ticker_sentiment": {"MSFT": -0.5},
+    }
+    msg = _mod._build_message(cs)
+    assert "<b>" in msg
+    assert "<pre>" in msg
+    # Should NOT use Markdown syntax
+    assert "```" not in msg
