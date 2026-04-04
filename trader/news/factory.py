@@ -7,7 +7,7 @@ from trader.news.base import NewsProvider
 def get_news_provider(config) -> NewsProviderChain:
     """
     Build the news provider chain from config.
-    Order: Marketaux → Benzinga → Finnhub → Alpha Vantage → EODHD
+    Order: Marketaux → Benzinga → Finnhub → Alpha Vantage → EODHD → WebScrape (always)
     Providers with empty API keys are skipped.
     """
     providers: list[NewsProvider] = []
@@ -31,5 +31,9 @@ def get_news_provider(config) -> NewsProviderChain:
     if getattr(config, "eodhd_api_key", ""):
         from trader.news.eodhd import EODHDProvider
         providers.append(EODHDProvider(config.eodhd_api_key))
+
+    # Always-available fallback — no API key required
+    from trader.news.webscrape import WebScrapeProvider
+    providers.append(WebScrapeProvider())
 
     return NewsProviderChain(providers)
