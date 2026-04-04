@@ -3,6 +3,7 @@ import asyncio, json
 import click
 from trader.news.factory import get_news_provider
 from trader.news.sentiment import SentimentScorer
+from trader.news.webscrape import WebScrapeProvider
 from trader.cli.__main__ import output_json
 
 def _parse_lookback(s: str) -> int:
@@ -62,6 +63,32 @@ def sentiment(ctx, ticker, lookback):
         finally:
             await client.aclose()
         return scorer.score(ticker, items, lookback_hours=hours)
+    try:
+        output_json(asyncio.run(run()))
+    except Exception as e:
+        import sys
+        click.echo(json.dumps({"error": str(e), "code": type(e).__name__}))
+        sys.exit(1)
+
+@news.command()
+@click.argument("tickers")
+@click.option("--limit", default=10, type=int, help="Max articles per ticker.")
+@click.pass_context
+def scrape(ctx, tickers, limit):
+    """
+    Scrape news headlines from web sources (no API key needed).
+
+    TICKERS: Comma or space-separated tickers e.g. AAPL,MSFT
+
+    Example: trader news scrape AAPL,MSFT --limit 5
+    """
+    ticker_list = [t.strip() for t in tickers.replace(",", " ").split()]
+    provider = WebScrapeProvider()
+    async def run():
+        try:
+            return await provider.get_news(ticker_list, limit=limit)
+        finally:
+            await provider.aclose()
     try:
         output_json(asyncio.run(run()))
     except Exception as e:
