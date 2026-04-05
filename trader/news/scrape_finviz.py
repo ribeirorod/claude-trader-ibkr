@@ -29,8 +29,9 @@ _RELATIVE_RE = re.compile(r"(Today|Yesterday)\s+(\d{1,2}:\d{2}(?:AM|PM))")
 
 
 def _parse_finviz_date(raw: str) -> str:
-    """Convert Finviz date string to ISO 8601."""
+    """Convert Finviz date string to ISO 8601 with UTC timezone."""
     raw = raw.strip()
+    _utc = dt.timezone.utc
 
     m = _RELATIVE_RE.match(raw)
     if m:
@@ -38,7 +39,7 @@ def _parse_finviz_date(raw: str) -> str:
         if m.group(1) == "Yesterday":
             today -= dt.timedelta(days=1)
         time_part = dt.datetime.strptime(m.group(2), "%I:%M%p").time()
-        return dt.datetime.combine(today, time_part).isoformat()
+        return dt.datetime.combine(today, time_part, tzinfo=_utc).isoformat()
 
     m = _DATE_RE.match(raw)
     if m:
@@ -49,10 +50,10 @@ def _parse_finviz_date(raw: str) -> str:
         date = dt.date(year, month, day)
         if m.group(4):
             time_part = dt.datetime.strptime(m.group(4), "%I:%M%p").time()
-            return dt.datetime.combine(date, time_part).isoformat()
-        return dt.datetime.combine(date, dt.time()).isoformat()
+            return dt.datetime.combine(date, time_part, tzinfo=_utc).isoformat()
+        return dt.datetime.combine(date, dt.time(), tzinfo=_utc).isoformat()
 
-    return dt.datetime.now().isoformat()
+    return dt.datetime.now(_utc).isoformat()
 
 
 def _make_id(url: str, headline: str) -> str:
