@@ -112,5 +112,21 @@
     "agent": "system",
     "cmd": "uv run python scripts/news-fetcher.py",
     "prompt": "Fetch news for all watchlist tickers. Caches results in .trader/pipeline/news-cache.json with 4-hour TTL. Skips tickers with fresh cache."
+  },
+  {
+    "id": "intraday-signals",
+    "cron": "0 12,16,20 * * 1-5",
+    "label": "Weekdays noon, 4pm, 8pm CET — intraday 4h signal scan",
+    "agent": "system",
+    "cmd": "uv run trader pipeline run --dry --interval 4h",
+    "prompt": "Run pipeline with 4h candles at noon, 4pm, 8pm CET (covers EU and US sessions). Dry-run only — produces proposals.json for review."
+  },
+  {
+    "id": "time-stop-check",
+    "cron": "0 21 * * 1-5",
+    "label": "Weekdays 9:00pm CET — position time-stop check",
+    "agent": "system",
+    "cmd": "uv run trader market time-stops",
+    "prompt": "Check position time-stops at end of US session. Flags any position held beyond the regime-dependent threshold (bull=20, caution=15, bear=10 trading days). Logs TIME_STOP_REVIEW events to .trader/logs/agent.jsonl."
   }
 ]

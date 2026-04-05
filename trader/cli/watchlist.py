@@ -230,21 +230,24 @@ def show(ctx, list_name, signals, strategy, interval, lookback):
                         r["signal_error"] = str(e)
 
             if signals:
-                from trader.news.benzinga import BenzingaClient
+                from trader.news.factory import get_news_provider
                 from trader.news.sentiment import SentimentScorer
 
-                benzinga = BenzingaClient(ctx.obj["config"])
+                news_provider = get_news_provider(ctx.obj["config"])
                 scorer = SentimentScorer()
 
                 async def score_ticker(ticker):
                     try:
-                        news = await benzinga.get_news([ticker], limit=5)
-                        sentiment = scorer.score(news)
-                        return {"ticker": ticker, "sentiment": sentiment}
+                        news = await news_provider.get_news([ticker], limit=5)
+                        result = scorer.score(ticker, news)
+                        return {"ticker": ticker, "sentiment": result.score}
                     except Exception:
                         return {"ticker": ticker, "sentiment": 0.0}
 
-                sentiments = await asyncio.gather(*[score_ticker(t) for t in tickers])
+                try:
+                    sentiments = await asyncio.gather(*[score_ticker(t) for t in tickers])
+                finally:
+                    await news_provider.aclose()
                 sent_map = {s["ticker"]: s["sentiment"] for s in sentiments}
 
                 for r in result:

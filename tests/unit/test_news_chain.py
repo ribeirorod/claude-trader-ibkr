@@ -159,8 +159,8 @@ def test_factory_returns_chain_with_available_providers(mock_config):
 
     provider = get_news_provider(mock_config)
     assert isinstance(provider, NewsProviderChain)
-    # marketaux + benzinga + finnhub + alphavantage + eodhd = 5
-    assert len(provider.providers) == 5
+    # marketaux + benzinga + finnhub + alphavantage + eodhd + webscrape = 6
+    assert len(provider.providers) == 6
 
 
 def test_factory_skips_providers_with_no_key(mock_config):
@@ -176,4 +176,32 @@ def test_factory_skips_providers_with_no_key(mock_config):
     mock_config.eodhd_api_key = ""
     provider = get_news_provider(mock_config)
     assert isinstance(provider, NewsProviderChain)
+    # benzinga + webscrape = 2
+    assert len(provider.providers) == 2
+
+
+def test_factory_always_includes_webscrape_as_last_provider(mock_config):
+    """WebScrapeProvider is always appended as the last provider, no API key needed."""
+    from trader.news.factory import get_news_provider
+    from trader.news.webscrape import WebScrapeProvider
+
+    provider = get_news_provider(mock_config)
+    assert isinstance(provider.providers[-1], WebScrapeProvider)
+
+
+def test_factory_webscrape_present_even_with_no_keys():
+    """Even with zero API keys, chain has WebScrapeProvider."""
+    from unittest.mock import MagicMock
+    from trader.news.factory import get_news_provider
+    from trader.news.webscrape import WebScrapeProvider
+
+    empty_config = MagicMock()
+    empty_config.marketaux_api_key = ""
+    empty_config.benzinga_api_key = ""
+    empty_config.massive_api_key = ""
+    empty_config.finnhub_api_key = ""
+    empty_config.alphavantage_api_key = ""
+    empty_config.eodhd_api_key = ""
+    provider = get_news_provider(empty_config)
     assert len(provider.providers) == 1
+    assert isinstance(provider.providers[0], WebScrapeProvider)

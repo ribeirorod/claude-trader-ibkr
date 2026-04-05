@@ -26,6 +26,7 @@ dependencies = [
     "pillow>=9.5",
     "structlog>=25.5.0",
     "telegramify-markdown>=1.1.1",
+    "selectolax>=0.3",
 ]
 
 [project.optional-dependencies]

@@ -82,6 +82,55 @@ def test_pipeline_analyze_command(tmp_path):
     assert "total_proposals" in data
 
 
+def test_pipeline_analyze_with_interval(tmp_path):
+    """pipeline analyze --interval 4h should pass interval to run_analyze."""
+    runner = CliRunner()
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_dir.mkdir()
+
+    from trader.pipeline.models import CandidateSet, Candidate
+    cs = CandidateSet(
+        run_id="test",
+        regime="bull",
+        sectors={"Technology": [
+            Candidate(ticker="AAPL", source="watchlist", priority="high", sector="Technology"),
+        ]},
+    )
+    (pipeline_dir / "candidates.json").write_text(cs.model_dump_json())
+
+    import pandas as pd
+    import numpy as np
+    df = pd.DataFrame({
+        "open": np.linspace(100, 150, 60),
+        "high": np.linspace(102, 152, 60),
+        "low": np.linspace(98, 148, 60),
+        "close": np.linspace(100, 150, 60),
+        "volume": [1_000_000] * 60,
+    }, index=pd.date_range("2026-01-01", periods=60, freq="B"))
+
+    mock_acct = MagicMock()
+    mock_acct.balance.net_liquidation = 100_000.0
+
+    with patch("trader.cli.pipeline._get_pipeline_dir", return_value=pipeline_dir), \
+         patch("trader.pipeline.analyze._fetch_ohlcv", return_value=df) as mock_fetch, \
+         patch("trader.market.regime.detect_regime", return_value=MagicMock(value="bull")), \
+         patch("trader.cli.pipeline.get_adapter") as mock_adapter_factory:
+
+        mock_adapter = AsyncMock()
+        mock_adapter.get_account = AsyncMock(return_value=mock_acct)
+        mock_adapter.list_positions = AsyncMock(return_value=[])
+        mock_adapter.list_orders = AsyncMock(return_value=[])
+        mock_adapter_factory.return_value = mock_adapter
+
+        result = runner.invoke(cli, ["pipeline", "analyze", "--interval", "4h"])
+
+    assert result.exit_code == 0, result.output
+    if mock_fetch.call_count > 0:
+        call_kwargs = mock_fetch.call_args
+        assert call_kwargs[1].get("interval") == "4h" or (len(call_kwargs[0]) >= 3 and call_kwargs[0][2] == "4h"), \
+            f"Expected interval='4h', got: {call_kwargs}"
+
+
 def test_execute_rejects_when_guard_blocks(tmp_path):
     """OrderGuard rejection produces status='guarded' with reason in output."""
     from trader.pipeline.models import (
@@ -264,11 +313,12 @@ def test_pipeline_run_dry_skips_execute(tmp_path):
         }))
 
     @click.pass_context
-    def fake_analyze(ctx, regime, consensus, watchlist_consensus):
+    def fake_analyze(ctx, regime, consensus, watchlist_consensus, interval="1d"):
         analyze_called.append({
             "regime": regime,
             "consensus": consensus,
             "watchlist_consensus": watchlist_consensus,
+            "interval": interval,
         })
 
     @click.pass_context

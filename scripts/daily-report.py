@@ -38,10 +38,6 @@ log = logging.getLogger("daily-report")
 
 # ── formatting helpers ────────────────────────────────────────────────────────
 
-def _col(val, width: int, align: str = "<") -> str:
-    return format(str(val), f"{align}{width}")
-
-
 def _fmt_price(v: float | None, currency: str = "") -> str:
     if v is None:
         return "-"
@@ -71,43 +67,31 @@ def _order_type_label(o) -> str:
     return t
 
 
-def _table_orders(orders) -> str:
+def _fmt_orders(orders) -> str:
     if not orders:
         return "  (none)"
-    header = f"{'Time':<6}  {'Ticker':<7} {'Side':<5} {'Type':<9} {'Qty':>5}  {'Filled':>6}  {'Price':>9}  {'TP':>8}  {'SL':>8}"
-    sep    = "-" * len(header)
-    rows = [header, sep]
+    rows = []
     for o in orders:
-        tp = _fmt_price(o.take_profit) if o.take_profit else "-"
-        sl = _fmt_price(o.stop_loss) if o.stop_loss else "-"
-        rows.append(
-            f"{_col(_parse_time(o.created_at), 6)}  "
-            f"{_col(o.ticker, 7)}"
-            f"{_col(o.side.upper(), 5)}"
-            f"{_col(_order_type_label(o), 9)}"
-            f"{int(o.qty):>5}  "
-            f"{int(o.filled_qty or 0):>6}  "
-            f"{_fmt_price(o.filled_price or o.price):>9}  "
-            f"{tp:>8}  "
-            f"{sl:>8}"
-        )
+        side = o.side.upper()
+        otype = _order_type_label(o)
+        qty = int(o.qty)
+        price = _fmt_price(o.filled_price or o.price)
+        line = f"  {o.ticker:<7} {side} {qty}x @ {price}"
+        if otype == "BRACKET":
+            tp = _fmt_price(o.take_profit) if o.take_profit else "-"
+            sl = _fmt_price(o.stop_loss) if o.stop_loss else "-"
+            line += f"  TP:{tp} SL:{sl}"
+        rows.append(line)
     return "\n".join(rows)
 
 
-def _table_positions(positions) -> str:
+def _fmt_positions(positions) -> str:
     if not positions:
         return "  (none)"
-    header = f"{'Ticker':<7} {'Qty':>6}  {'Avg Cost':>9}  {'Mkt Val':>10}  {'Unreal P&L':>11}"
-    sep    = "-" * len(header)
-    rows = [header, sep]
+    rows = []
     for p in positions:
-        rows.append(
-            f"{_col(p.ticker, 7)}"
-            f"{int(p.qty):>6}  "
-            f"{_fmt_price(p.avg_cost):>9}  "
-            f"{_fmt_price(p.market_value):>10}  "
-            f"{_fmt_pnl(p.unrealized_pnl):>11}"
-        )
+        pnl = _fmt_pnl(p.unrealized_pnl)
+        rows.append(f"  {p.ticker:<7} {int(p.qty):>4}x  avg {_fmt_price(p.avg_cost):>8}  P&L {pnl}")
     return "\n".join(rows)
 
 
@@ -120,24 +104,18 @@ def _bod_report(positions, orders, account, now: datetime) -> str:
     ccy = b.currency
 
     return "\n".join([
-        f"*DAILY BRIEF — {date_str}*",
+        f"<b>DAILY BRIEF — {date_str}</b>",
         "",
-        "*ACCOUNT*",
-        "```",
-        f"{'Cash':<16} {_fmt_price(b.cash, ccy)}",
-        f"{'Net Liquidation':<16} {_fmt_price(b.net_liquidation, ccy)}",
-        f"{'Buying Power':<16} {_fmt_price(b.buying_power, ccy)}",
-        "```",
+        f"<b>Account</b>",
+        f"<pre>  Net Liq   {_fmt_price(b.net_liquidation, ccy)}",
+        f"  Cash      {_fmt_price(b.cash, ccy)}",
+        f"  Buying Pw {_fmt_price(b.buying_power, ccy)}</pre>",
         "",
-        f"*POSITIONS  ({len(positions)} open)*",
-        "```",
-        _table_positions(positions),
-        "```",
+        f"<b>Positions ({len(positions)})</b>",
+        f"<pre>{_fmt_positions(positions)}</pre>",
         "",
-        f"*OPEN ORDERS  ({len(open_orders)})*",
-        "```",
-        _table_orders(open_orders),
-        "```",
+        f"<b>Open Orders ({len(open_orders)})</b>",
+        f"<pre>{_fmt_orders(open_orders)}</pre>",
     ])
 
 
@@ -151,43 +129,30 @@ def _eod_report(positions, orders, account, now: datetime) -> str:
     realized = sum(p.realized_pnl for p in positions)
 
     lines = [
-        f"*EOD SUMMARY — {date_str}*",
+        f"<b>EOD SUMMARY — {date_str}</b>",
         "",
-        f"*ORDERS FILLED TODAY  ({len(filled)})*",
-        "```",
-        _table_orders(filled),
-        "```",
+        f"<b>Filled Today ({len(filled)})</b>",
+        f"<pre>{_fmt_orders(filled)}</pre>",
     ]
 
     if open_orders:
         lines += [
             "",
-            f"*OPEN / GTC  ({len(open_orders)})*",
-            "```",
-            _table_orders(open_orders),
-            "```",
+            f"<b>Open / GTC ({len(open_orders)})</b>",
+            f"<pre>{_fmt_orders(open_orders)}</pre>",
         ]
 
     lines += [
         "",
-        f"*POSITIONS  ({len(positions)} open)*",
-        "```",
-        _table_positions(positions),
-        "```",
+        f"<b>Positions ({len(positions)})</b>",
+        f"<pre>{_fmt_positions(positions)}</pre>",
         "",
-        "*P&L*",
-        "```",
-        f"{'Unrealized':<14} {_fmt_pnl(unreal)}",
-        f"{'Realized':<14} {_fmt_pnl(realized)}",
-        f"{'Total':<14} {_fmt_pnl(unreal + realized)}",
-        "```",
+        f"<b>P&L</b>",
+        f"<pre>  Unrealized  {_fmt_pnl(unreal)}",
+        f"  Realized    {_fmt_pnl(realized)}",
+        f"  Total       {_fmt_pnl(unreal + realized)}</pre>",
         "",
-        "*ACCOUNT*",
-        "```",
-        f"{'Net Liquidation':<16} {_fmt_price(b.net_liquidation, ccy)}",
-        f"{'Cash':<16} {_fmt_price(b.cash, ccy)}",
-        f"{'Buying Power':<16} {_fmt_price(b.buying_power, ccy)}",
-        "```",
+        f"<pre>  Net Liq     {_fmt_price(b.net_liquidation, ccy)}</pre>",
     ]
 
     return "\n".join(lines)
@@ -231,7 +196,7 @@ def main() -> None:
     else:
         msg = _eod_report(positions, orders, account, now)
 
-    ok = send_telegram(msg, config=cfg, parse_mode="Markdown")
+    ok = send_telegram(msg, config=cfg, parse_mode="HTML")
     if ok:
         log.info("Report sent (slot=%s).", args.slot)
     else:

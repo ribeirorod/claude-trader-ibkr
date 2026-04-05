@@ -156,13 +156,13 @@ def test_buy_suppressed_when_position_limit_reached():
 
 
 def test_buy_allowed_in_bear_regime():
-    """Bear regime no longer blocks longs — strategies assess conditions, regime adjusts sizing."""
+    """Bear regime allows longs when sentiment is positive (>0.1)."""
     rf = RiskFilter()
     result = rf.filter(
         signal=1,
         quote=make_quote(),
         position=None,
-        sentiment=None,
+        sentiment=make_sentiment(0.5),
         regime="bear",
     )
     assert result["signal"] == 1
@@ -205,3 +205,74 @@ def test_buy_passes_when_regime_is_none():
         regime=None,
     )
     assert result["signal"] == 1
+
+
+# ── Bear regime sentiment gate ─────────────────────────────────────────────
+
+def test_bear_regime_positive_sentiment_allowed():
+    """Bear regime + positive sentiment (0.3) → long allowed."""
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None,
+        sentiment=make_sentiment(0.3), regime="bear",
+    )
+    assert result["signal"] == 1
+    assert result["filtered"] is False
+
+
+def test_bear_regime_neutral_sentiment_filtered():
+    """Bear regime + neutral sentiment (0.05) → long filtered."""
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None,
+        sentiment=make_sentiment(0.05), regime="bear",
+    )
+    assert result["signal"] == 0
+    assert result["filtered"] is True
+    assert result["filter_reason"] == "bear_sentiment_gate"
+
+
+def test_bear_regime_negative_sentiment_filtered():
+    """Bear regime + negative sentiment (-0.2) → long filtered."""
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None,
+        sentiment=make_sentiment(-0.2), regime="bear",
+    )
+    assert result["signal"] == 0
+    assert result["filtered"] is True
+    assert result["filter_reason"] == "bear_sentiment_gate"
+
+
+def test_bear_regime_no_sentiment_filtered():
+    """Bear regime + no sentiment data → long filtered."""
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None,
+        sentiment=None, regime="bear",
+    )
+    assert result["signal"] == 0
+    assert result["filtered"] is True
+    assert result["filter_reason"] == "bear_sentiment_gate"
+
+
+def test_bull_regime_negative_sentiment_uses_existing_check():
+    """Bull regime + negative sentiment → uses existing min_sentiment check, not bear gate."""
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=1, quote=make_quote(), position=None,
+        sentiment=make_sentiment(-0.1), regime="bull",
+    )
+    assert result["signal"] == 1
+    assert result["filtered"] is False
+
+
+def test_bear_regime_short_not_affected():
+    """Short signals in bear regime → NOT affected by bear sentiment gate."""
+    rf = RiskFilter()
+    result = rf.filter(
+        signal=-1, quote=make_quote(), position=None,
+        sentiment=make_sentiment(-0.5), regime="bear",
+    )
+    assert result["signal"] == -1
+    assert result["filtered"] is False

@@ -14,7 +14,7 @@ from trader.pipeline.models import (
     ProposalSet, SectorProposals, VixContext,
 )
 from trader.market.vix import vix_gate
-from trader.strategies.factory import get_strategy, list_strategies
+from trader.strategies.factory import get_strategy, list_strategies, get_regime_thresholds
 from trader.strategies.risk_filter import RiskFilter
 from trader.strategies.stop_loss import (
     atr as compute_atr,
@@ -32,26 +32,13 @@ _MAX_POSITION_PCT = 10.0
 # Minimum price for candidates (filter out penny stocks with unreliable signals)
 _MIN_PRICE = 1.0
 
-# Re-use the yfinance ticker resolution from strategies CLI
-_YF_TICKER_MAP: dict[str, str] = {
-    "CSPX": "CSPX.L", "VUSA": "VUSA.AS", "IWDA": "IWDA.L", "SWDA": "SWDA.L",
-    "EQQQ": "EQQQ.L", "IMEU": "IMEU.L", "EMIM": "EMIM.L",
-    "SGLN": "SGLN.L", "PHAU": "PHAU.L", "AGGH": "AGGG.L", "IBTA": "IBTA.L",
-    "IDTL": "IDTL.L", "IUES": "IUES.L", "XLES": "XLES.L",
-    # Inverse / short ETFs (UCITS)
-    "XSPD": "DXS3.DE", "XISP": "XISP.L", "DSPX": "DSPX.L",
-    # European defense (no exchange suffix in watchlist)
-    "RHM": "RHM.DE",
-}
+from trader.market.inverse_etfs import load_inverse_map, find_inverse
+from trader.market.ticker_map import resolve_yf_ticker as _resolve_yf_ticker
 
 
-def _resolve_yf_ticker(ticker: str) -> str:
-    return _YF_TICKER_MAP.get(ticker.upper(), ticker)
-
-
-def _fetch_ohlcv(ticker: str, period: str = "90d") -> pd.DataFrame:
+def _fetch_ohlcv(ticker: str, period: str = "90d", interval: str = "1d") -> pd.DataFrame:
     """Fetch OHLCV data via yfinance. Separate function for easy mocking."""
-    df = yf.download(_resolve_yf_ticker(ticker), period=period, progress=False, auto_adjust=True)
+    df = yf.download(_resolve_yf_ticker(ticker), period=period, interval=interval, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df.columns = [c.lower() for c in df.columns]
@@ -101,15 +88,26 @@ def _run_all_strategies(
     return results
 
 
+_INTERVAL_PERIOD: dict[str, str] = {
+    "1m": "7d",
+    "5m": "30d",
+    "15m": "30d",
+    "1h": "30d",
+    "4h": "30d",
+    "1d": "90d",
+}
+
+
 def run_analyze(
     pipeline_dir: Path,
     regime: str,
     account_value: float,
     existing_positions: list[Position],
     open_orders: list[Order],
-    consensus_threshold: int = 3,
-    watchlist_consensus_threshold: int = 2,
+    consensus_threshold: int | None = None,
+    watchlist_consensus_threshold: int | None = None,
     paper_mode: bool = False,
+    interval: str = "1d",
 ) -> ProposalSet:
     """Analyze candidates and produce ranked trade proposals.
 
@@ -130,6 +128,25 @@ def run_analyze(
     watchlist_consensus_threshold : int
         Minimum strategies agreeing for watchlist candidates (default 2/6)
     """
+    # Resolve consensus thresholds: CLI explicit > regime config > hardcoded defaults
+    _default_discovery = 3
+    _default_watchlist = 2
+    regime_thresholds = get_regime_thresholds(regime)
+    if consensus_threshold is None:
+        consensus_threshold = (
+            regime_thresholds["discovery"]
+            if regime_thresholds and "discovery" in regime_thresholds
+            else _default_discovery
+        )
+    if watchlist_consensus_threshold is None:
+        watchlist_consensus_threshold = (
+            regime_thresholds["watchlist"]
+            if regime_thresholds and "watchlist" in regime_thresholds
+            else _default_watchlist
+        )
+
+    period = _INTERVAL_PERIOD.get(interval, "90d")
+
     candidates_path = pipeline_dir / "candidates.json"
     cs = CandidateSet.model_validate_json(candidates_path.read_text())
     ticker_sentiment = cs.ticker_sentiment  # {ticker: float}
@@ -161,11 +178,13 @@ def run_analyze(
     all_proposals: list[Proposal] = []
 
     option_expiry = _next_monthly_expiry(min_dte=30)
+    inverse_map = load_inverse_map()
+    inverse_max_pct = inverse_map.get("usage_rules", {}).get("max_portfolio_pct", 10)
 
     for sector_name, candidates in cs.sectors.items():
         for candidate in candidates:
             try:
-                df = _fetch_ohlcv(candidate.ticker)
+                df = _fetch_ohlcv(candidate.ticker, period=period, interval=interval)
                 if df.empty or len(df) < 30:
                     continue
             except Exception:
@@ -326,6 +345,46 @@ def run_analyze(
                     )
                     position_value = entry_price * qty
                     pct_of_nlv = (position_value / account_value * 100) if account_value > 0 else 0
+
+                # --- Inverse ETF companion proposal ---
+                inv_ticker = find_inverse(
+                    candidate.ticker, inverse_map, sector=resolved_sector
+                )
+                if inv_ticker:
+                    inv_qty = max(1, qty)
+                    inv_value = entry_price * inv_qty
+                    inv_pct = (inv_value / account_value * 100) if account_value > 0 else 0
+                    if inv_pct > inverse_max_pct:
+                        inv_qty = max(1, int(account_value * inverse_max_pct / 100 / entry_price))
+                        inv_value = entry_price * inv_qty
+                        inv_pct = (inv_value / account_value * 100) if account_value > 0 else 0
+                    inv_order = ProposalOrder(
+                        side="buy",
+                        order_type="limit",
+                        contract_type="etf",
+                        qty=inv_qty,
+                        price=round(entry_price, 2),
+                    )
+                    inv_sizing = ProposalSizing(
+                        atr=round(current_atr, 4),
+                        risk_per_share=round(abs(risk_per_share), 4),
+                        position_value=round(inv_value, 2),
+                        pct_of_nlv=round(inv_pct, 2),
+                    )
+                    all_proposals.append(Proposal(
+                        rank=0,
+                        ticker=inv_ticker,
+                        source=candidate.source,
+                        direction="hedge",
+                        consensus=consensus,
+                        strategies_agree=agree,
+                        strategies_disagree=disagree,
+                        conviction="medium",
+                        order=inv_order,
+                        sizing=inv_sizing,
+                        news_context=f"Inverse ETF for {candidate.ticker}",
+                        sector=resolved_sector,
+                    ))
 
             # Conviction scoring
             if consensus >= 5:
